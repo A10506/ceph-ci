@@ -24,6 +24,7 @@
 #include "include/stringify.h"
 
 #include "msg/msg_types.h"
+#include "osd/osd_types.h"
 
 // For PerfCounterType
 #include "messages/MMgrReport.h"
@@ -252,5 +253,37 @@ struct pool_cache_t {
     }
   }
 };
+
+struct imageperf_t {
+  string imgname;
+  utime_t last_update;
+  op_stat_t raw_data;
+  op_stat_t pre_data;
+
+  uint32_t rd_ops;	//io/s
+  uint32_t rd_bws;	//Byte/s
+  uint32_t rd_lat;	//millisecond
+  uint32_t wr_ops;
+  uint32_t wr_bws;
+  uint32_t wr_lat;	//millisecond
+  uint32_t total_ops;
+  uint32_t total_bws;
+  uint32_t total_lat;	//millisecond
+
+  imageperf_t(string _imgname,
+              op_stat_t _raw = op_stat_t())
+    : imgname(_imgname), raw_data(), pre_data(),
+      rd_ops(0), rd_bws(0), rd_lat(0),
+      wr_ops(0), wr_bws(0), wr_lat(0),
+      total_ops(0), total_bws(0), total_lat(0) {
+      last_update = ceph_clock_now();
+  }
+
+  void update_stat(op_stat_t &rdata) {
+    last_update = ceph_clock_now();
+    raw_data.add(rdata);
+  }
+};
+
 #endif
 

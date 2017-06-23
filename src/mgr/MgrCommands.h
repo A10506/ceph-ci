@@ -146,3 +146,16 @@ COMMAND("mgr dump cache-stat "                          \
         "name=pool_name,type=CephString,n=N,req=false", \
         "dump cache info",                              \
         "mgr", "r", "cli,rest")
+
+//mgr
+COMMAND("mgr report imgs_perf "				\
+	"name=name,type=CephString "			\
+	"name=id,type=CephString",			\
+	"report pool image perf data from clients",     \
+	"mgr", "rw", "cli,rest")
+
+COMMAND("mgr dump imgs_perf "				\
+	"name=dumpcontents,type=CephString,n=N,req=false",
+	"dump image perf statistics",     		\
+	"mgr", "r", "cli,rest")
+

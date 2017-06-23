@@ -235,6 +235,9 @@ struct C_InvalidateCache : public Context {
     assert(journal == NULL);
     assert(asok_hook == NULL);
 
+    if (m_report_timer) {
+      perf_report_stop();
+    }
     if (perfcounter) {
       perf_stop();
     }
@@ -278,6 +281,7 @@ struct C_InvalidateCache : public Context {
 
     trace_endpoint.copy_name(pname);
     perf_start(pname);
+    perf_report_start();
 
     if (cache) {
       Mutex::Locker l(cache_lock);
@@ -422,6 +426,76 @@ struct C_InvalidateCache : public Context {
     assert(perfcounter);
     cct->get_perfcounters_collection()->remove(perfcounter);
     delete perfcounter;
+  }
+
+  void ImageCtx::perf_report_start() {
+    ImageCtx::get_timer_instance(cct, &m_report_timer, &report_timer_lock);
+
+    Mutex::Locker timer_locker(*report_timer_lock);
+    m_report_callback = new FunctionContext([this](int r){ send_report();});
+    m_report_timer->add_event_after(cct->_conf->get_val<double>("rbd_perf_report_interval"),
+                                  m_report_callback);
+  }
+
+  void ImageCtx::perf_report_stop() {
+    Mutex::Locker locker(*report_timer_lock);
+    if (m_report_callback) {
+      m_report_timer->cancel_event(m_report_callback);
+    }
+    m_report_callback = nullptr;
+  }
+
+  void ImageCtx::send_report() {
+    assert(report_timer_lock->is_locked());
+    op_stat_t report;
+
+    bufferlist inbl;
+    librados::Rados rados(md_ctx);
+    string fullid   = std::to_string(md_ctx.get_id()) + "." + id;
+    string fullname = md_ctx.get_pool_name() + "." + name;
+
+    get_report_data(&report);
+    ldout(cct, 20) << " send report..."
+                   << " name: " << fullname
+                   << " id: " << fullid
+                   << ": rd|bytes|lat " << report.rd_num
+                   << "|" << report.rd_bytes
+                   << "|" << report.rd_latency
+                   << ", wr|bytes|lat " << report.wr_num
+                   << "|" << report.wr_bytes
+                   << "|" << report.wr_latency
+                   << dendl;
+
+    report.encode(inbl);
+    rados.mgr_command("{\"prefix\": \"mgr report imgs_perf\","
+                      "\"name\": \"" + fullname + "\""
+                      ", \"id\": \"" + fullid + "\"}", inbl, NULL, NULL);
+
+    m_report_callback = new FunctionContext([this](int r){ send_report();});
+    m_report_timer->add_event_after(cct->_conf->get_val<double>("rbd_perf_report_interval"),
+                                    m_report_callback);
+  }
+
+  void ImageCtx::get_report_data(struct op_stat_t *rpdata) {
+    assert(rpdata);
+
+    op_stat_t cur_stat;
+    op_stat_t pre_stat  = m_perfstat;
+
+    cur_stat.rd_num     = perfcounter->get(l_librbd_rd);
+    cur_stat.rd_bytes   = perfcounter->get(l_librbd_rd_bytes);
+    cur_stat.rd_latency = perfcounter->tget(l_librbd_rd_latency).to_nsec();
+    cur_stat.wr_num     = perfcounter->get(l_librbd_wr);
+    cur_stat.wr_bytes   = perfcounter->get(l_librbd_wr_bytes);
+    cur_stat.wr_latency = perfcounter->tget(l_librbd_wr_latency).to_nsec();
+    cur_stat.op_num     = cur_stat.rd_num + cur_stat.wr_num;
+    cur_stat.op_bytes   = cur_stat.rd_bytes + cur_stat.wr_bytes;
+    cur_stat.op_latency = cur_stat.rd_latency + cur_stat.wr_latency;
+
+    m_perfstat = cur_stat;
+
+    cur_stat.sub(pre_stat);
+    *rpdata = cur_stat;
   }
 
   void ImageCtx::set_read_flag(unsigned flag) {
