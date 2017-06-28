@@ -69,17 +69,17 @@ namespace crimson {
     constexpr uint tag_modulo = 1000000;
 
     struct ClientInfo {
-      const double reservation;  // minimum
-      const double weight;       // proportional
-      const double limit;        // maximum
-      const double bandwidth;    // max bandwidth
+      double reservation;  // minimum
+      double weight;       // proportional
+      double limit;        // maximum
+      double bandwidth;    // max bandwidth
 
       // multiplicative inverses of above, which we use in calculations
       // and don't want to recalculate repeatedly
-      const double reservation_inv;
-      const double weight_inv;
-      const double limit_inv;
-      const double bandwidth_inv;
+      double reservation_inv;
+      double weight_inv;
+      double limit_inv;
+      double bandwidth_inv;
 
       // order parameters -- min, "normal", max
       ClientInfo(double _reservation, double _weight,
@@ -96,6 +96,30 @@ namespace crimson {
 	// empty
       }
 
+      ClientInfo() :
+        reservation(-1), weight(-1), limit(-1), bandwidth(-1),
+        reservation_inv(-1), weight_inv(-1), limit_inv(-1), bandwidth_inv(-1) {}
+
+      ClientInfo(const ClientInfo &other) :
+        ClientInfo(other.reservation, other.weight, other.limit, other.bandwidth) {
+      }
+
+      bool valid() const {
+        bool invalid = reservation < 0 || weight < 0 || limit < 0 || bandwidth < 0;
+        return !invalid;
+      }
+
+      ClientInfo& operator=(ClientInfo other) {
+        reservation     = other.reservation;
+        weight          = other.weight;
+        limit           = other.limit;
+        bandwidth	= other.bandwidth;
+        reservation_inv = other.reservation_inv;
+        weight_inv      = other.weight_inv;
+        limit_inv       = other.limit_inv;
+        bandwidth_inv	= other.bandwidth_inv;
+        return *this;
+      }
 
       friend std::ostream& operator<<(std::ostream& out,
 				      const ClientInfo& client) {
@@ -788,7 +812,8 @@ namespace crimson {
 			  const C& client_id,
 			  const ReqParams& req_params,
 			  const Time time,
-			  const double cost = 0.0) {
+			  const double     cost = 0.0,
+			  const ClientInfo& client_info = ClientInfo()) {
 	++tick;
 
 	// this pointer will help us create a reference to a shared
@@ -798,8 +823,11 @@ namespace crimson {
 	auto client_it = client_map.find(client_id);
 	if (client_map.end() != client_it) {
 	  temp_client = &(*client_it->second); // address of obj of shared_ptr
+          temp_client->info = client_info.valid() ?
+                              client_info : client_info_f(client_id); // for update qos from client
 	} else {
-	  ClientInfo info = client_info_f(client_id);
+	  ClientInfo info = client_info.valid() ?
+	                    client_info : client_info_f(client_id);
 	  ClientRecRef client_rec =
 	    std::make_shared<ClientRec>(client_id, info, tick);
 	  resv_heap.push(client_rec);
@@ -1239,6 +1267,19 @@ namespace crimson {
 		    addl_cost);
       }
 
+      inline void add_request(const R& request,
+                              const C& client_id,
+                              const ClientInfo& client_info,
+                              const ReqParams& req_params,
+                              double addl_cost = 0.0) {
+        add_request(typename super::RequestRef(new R(request)),
+                    client_id,
+                    req_params,
+                    get_time(),
+                    addl_cost,
+                    client_info);
+      }
+
 
       inline void add_request(R&& request,
 			      const C& client_id,
@@ -1287,7 +1328,8 @@ namespace crimson {
 		       const C&                     client_id,
 		       const ReqParams&             req_params,
 		       const Time                   time,
-		       double                       addl_cost = 0.0) {
+		       double                       addl_cost = 0.0,
+		       const ClientInfo&            client_info = ClientInfo()) {
 	typename super::DataGuard g(this->data_mtx);
 #ifdef PROFILE
 	add_request_timer.start();
@@ -1296,7 +1338,8 @@ namespace crimson {
 			      client_id,
 			      req_params,
 			      time,
-			      addl_cost);
+			      addl_cost,
+			      client_info);
 	// no call to schedule_request for pull version
 #ifdef PROFILE
 	add_request_timer.stop();

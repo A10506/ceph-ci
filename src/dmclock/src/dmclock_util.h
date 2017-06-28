@@ -45,6 +45,18 @@ namespace crimson {
 #endif
     }
 
+    inline int gen_server_id(int osd, int shard) {
+      const int mask = 0xffff0000;
+      return ((osd << 16) & mask) | (shard & (mask >> 16));
+    }
+    inline std::pair<int, int> get_osd_shard(int serverid) {
+      const int mask = 0x0000ffff;
+      int osd, shard;
+      osd = (serverid >> 16) & mask;
+      shard = serverid & mask;
+      return std::make_pair(osd, shard);
+    }
+
     std::string format_time(const Time& time, uint modulo = 1000);
 
     void debugger();

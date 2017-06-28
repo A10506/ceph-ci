@@ -19,6 +19,8 @@
 #include "dmclock_util.h"
 #include "dmclock_recs.h"
 
+#include "gtest/gtest_prod.h"
+#include "../../common/Formatter.h"
 
 namespace crimson {
   namespace dmclock {
@@ -30,6 +32,21 @@ namespace crimson {
       uint32_t  my_rho;
       uint32_t  my_cost;
 
+      Counter  sum_delta_self;
+      Counter  sum_delta_prev;
+      Counter  sum_rho_self;
+      Counter  sum_rho_prev;
+      Counter  sum_cost_self;
+      Counter  sum_cost_prev;
+      uint32_t rate_delta;
+      uint32_t rate_rho;
+      uint32_t rate_cost;
+      uint32_t rate_delta_peak;
+      uint32_t rate_rho_peak;
+
+      std::vector<std::pair<uint32_t, uint32_t>> lastest_rates;
+      uint32_t rates_idx;
+
       ServerInfo(Counter _delta_prev_req,
                  Counter _rho_prev_req, Counter _cost_prev_req) :
 	delta_prev_req(_delta_prev_req),
@@ -37,7 +54,19 @@ namespace crimson {
         cost_prev_req(_cost_prev_req),
 	my_delta(0),
 	my_rho(0),
-        my_cost(0)
+        my_cost(0),
+        sum_delta_self(0),
+        sum_delta_prev(0),
+        sum_rho_self(0),
+        sum_rho_prev(0),
+        sum_cost_self(0),
+        sum_cost_prev(0),
+        rate_delta(0),
+        rate_rho(0),
+        rate_cost(0),
+        rate_delta_peak(0),
+        rate_rho_peak(0),
+        rates_idx(0)
       {
 	// empty
       }
@@ -53,8 +82,13 @@ namespace crimson {
 
       inline void resp_update(PhaseType phase, uint32_t cost) {
 	++my_delta;
-	if (phase == PhaseType::reservation) ++my_rho;
+        ++sum_delta_self;
+        if (phase == PhaseType::reservation) {
+          ++my_rho;
+          ++sum_rho_self;
+        }
         my_cost += cost;
+        sum_cost_self += cost;
       }
     };
 
@@ -85,7 +119,7 @@ namespace crimson {
       // NB: All threads declared at end, so they're destructed firs!
 
       std::unique_ptr<RunEvery> cleaning_job;
-
+      std::unique_ptr<RunEvery> calc_svr_job;
 
     public:
 
@@ -103,6 +137,12 @@ namespace crimson {
 	  std::unique_ptr<RunEvery>(
 	    new RunEvery(_clean_every,
 			 std::bind(&ServiceTracker::do_clean, this)));
+
+        calc_svr_job =
+          std::unique_ptr<RunEvery>(
+            new RunEvery(std::chrono::seconds(1),
+             std::bind(&ServiceTracker::do_svr_calc, this)));
+
       }
 
 
@@ -166,6 +206,46 @@ namespace crimson {
 	}
       }
 
+      void dump(ceph::Formatter *f) {
+        f->open_object_section("servers_rate");
+        for (auto i = server_map.begin(); i != server_map.end(); i++) {
+          uint64_t avgrate_5seconds_sum  = 0;
+          uint64_t avgrate_5seconds_res  = 0;
+          uint64_t avgrate_30seconds_sum = 0;
+          uint64_t avgrate_30seconds_res = 0;
+
+          if ( i->second.rates_idx < 1
+            || i->second.lastest_rates.size() < 1) {
+            continue;
+          }
+          for (uint32_t n = 0, idx = (i->second.rates_idx - 1) % i->second.lastest_rates.size();
+            n < 30; n++, idx = (idx == 0 ? i->second.lastest_rates.size() - 1 : idx - 1)) {
+            if (n < 5) {
+              avgrate_5seconds_sum += i->second.lastest_rates[idx].first;
+              avgrate_5seconds_res += i->second.lastest_rates[idx].second;
+            }
+            avgrate_30seconds_sum += i->second.lastest_rates[idx].first;
+            avgrate_30seconds_res += i->second.lastest_rates[idx].second;
+          }
+          avgrate_5seconds_sum = (avgrate_5seconds_sum + 2)/ 5; //+2 for round
+          avgrate_5seconds_res = (avgrate_5seconds_res + 2)/ 5;
+          avgrate_30seconds_sum = (avgrate_30seconds_sum + 15)/ 30; //+15 for round
+          avgrate_30seconds_res = (avgrate_30seconds_res + 15)/ 30;
+
+          std::stringstream oss;
+          std::pair<int, int> osdshard = get_osd_shard(i->first);
+          oss << "osd." << osdshard.first << "." << osdshard.second;
+          f->dump_format(oss.str().c_str(), "[%6u|%-6u, %6u,%6u]  r:[%6u|%-6u, %6u,%6u] %u",
+            i->second.rate_delta, i->second.rate_delta_peak,
+            avgrate_5seconds_sum, avgrate_30seconds_sum,
+            i->second.rate_rho, i->second.rate_rho_peak,
+            avgrate_5seconds_res, avgrate_30seconds_res,
+            i->second.rate_cost);
+        }
+        f->close_section();
+      }
+
+
     private:
 
       /*
@@ -200,6 +280,34 @@ namespace crimson {
 	  }
 	}
       } // do_clean
+
+      void do_svr_calc() {
+        DataGuard g(data_mtx);
+        for (auto i = server_map.begin(); i != server_map.end(); i++) {
+          i->second.rate_delta = i->second.sum_delta_self - i->second.sum_delta_prev;
+          i->second.rate_rho   = i->second.sum_rho_self - i->second.sum_rho_prev;
+          i->second.rate_cost  = i->second.sum_cost_self - i->second.sum_cost_prev;
+
+          i->second.sum_delta_prev = i->second.sum_delta_self;
+          i->second.sum_rho_prev = i->second.sum_rho_self;
+          i->second.sum_cost_prev = i->second.sum_cost_self;
+
+          i->second.rate_delta_peak = i->second.rate_delta > i->second.rate_delta_peak ?
+            i->second.rate_delta : i->second.rate_delta_peak;
+          i->second.rate_rho_peak = i->second.rate_rho > i->second.rate_rho_peak ?
+            i->second.rate_rho : i->second.rate_rho_peak;
+
+          if (i->second.lastest_rates.size() < 32) {
+            i->second.lastest_rates.emplace_back(
+              std::make_pair(i->second.rate_delta, i->second.rate_rho));
+          } else {
+            i->second.lastest_rates[i->second.rates_idx % 32] =
+              std::make_pair(i->second.rate_delta, i->second.rate_rho);
+          }
+          i->second.rates_idx++;
+        }
+      }
+
     }; // class ServiceTracker
   }
 }
