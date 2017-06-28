@@ -31,29 +31,34 @@ namespace crimson {
       // count of reservation replies since last request; MUSTN'T BE 0
       uint32_t rho;
 
-      ReqParams(uint32_t _delta, uint32_t _rho) :
+      uint32_t cost;
+
+      ReqParams(uint32_t _delta, uint32_t _rho, uint32_t _cost = 0) :
 	delta(_delta),
-	rho(_rho)
+	rho(_rho),
+	cost(_cost)
       {
 	assert(0 != delta && 0 != rho && rho <= delta);
       }
 
       ReqParams() :
-	ReqParams(1, 1)
+	ReqParams(1, 1, 1)
       {
 	// empty
       }
 
       ReqParams(const ReqParams& other) :
 	delta(other.delta),
-	rho(other.rho)
+	rho(other.rho),
+	cost(other.cost)
       {
 	// empty
       }
 
       friend std::ostream& operator<<(std::ostream& out, const ReqParams& rp) {
-	out << "ReqParams{ delta:" << rp.delta <<
-	  ", rho:" << rp.rho << " }";
+	out << "ReqParams{ delta:" << rp.delta
+	    << ", rho:" << rp.rho
+	    << ", cost:" << rp.cost << " }";
 	return out;
       }
     }; // class ReqParams

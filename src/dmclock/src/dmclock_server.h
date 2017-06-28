@@ -72,21 +72,26 @@ namespace crimson {
       const double reservation;  // minimum
       const double weight;       // proportional
       const double limit;        // maximum
+      const double bandwidth;    // max bandwidth
 
       // multiplicative inverses of above, which we use in calculations
       // and don't want to recalculate repeatedly
       const double reservation_inv;
       const double weight_inv;
       const double limit_inv;
+      const double bandwidth_inv;
 
       // order parameters -- min, "normal", max
-      ClientInfo(double _reservation, double _weight, double _limit) :
+      ClientInfo(double _reservation, double _weight,
+                  double _limit, double _bandwidth = 0.0) :
 	reservation(_reservation),
 	weight(_weight),
 	limit(_limit),
+	bandwidth(_bandwidth),
 	reservation_inv(0.0 == reservation ? 0.0 : 1.0 / reservation),
 	weight_inv(     0.0 == weight      ? 0.0 : 1.0 / weight),
-	limit_inv(      0.0 == limit       ? 0.0 : 1.0 / limit)
+	limit_inv(      0.0 == limit       ? 0.0 : 1.0 / limit),
+	bandwidth_inv(  0.0 == bandwidth   ? 0.0 : 1.0 / bandwidth)
       {
 	// empty
       }
@@ -98,9 +103,11 @@ namespace crimson {
 	  "{ ClientInfo:: r:" << client.reservation <<
 	  " w:" << std::fixed << client.weight <<
 	  " l:" << std::fixed << client.limit <<
+          " b:" << std::fixed << client.bandwidth <<
 	  " 1/r:" << std::fixed << client.reservation_inv <<
 	  " 1/w:" << std::fixed << client.weight_inv <<
 	  " 1/l:" << std::fixed << client.limit_inv <<
+          " 1/b:" << std::fixed << client.bandwidth_inv <<
 	  " }";
 	return out;
       }
@@ -111,6 +118,7 @@ namespace crimson {
       double reservation;
       double proportion;
       double limit;
+      double bandwidth;
       bool   ready; // true when within limit
 #ifndef DO_NOT_DELAY_TAG_CALC
       Time   arrival;
@@ -120,6 +128,7 @@ namespace crimson {
 		 const ClientInfo& client,
 		 const uint32_t delta,
 		 const uint32_t rho,
+                 const uint32_t costb,
 		 const Time time,
 		 const double cost = 0.0) :
 	reservation(cost + tag_calc(time,
@@ -137,6 +146,11 @@ namespace crimson {
 		       client.limit_inv,
 		       delta,
 		       false)),
+        bandwidth(tag_calc(time,
+		       prev_tag.bandwidth,
+		       client.bandwidth_inv,
+		       costb,
+		       false)),
 	ready(false)
 #ifndef DO_NOT_DELAY_TAG_CALC
 	, arrival(time)
@@ -150,13 +164,14 @@ namespace crimson {
 		 const ReqParams req_params,
 		 const Time time,
 		 const double cost = 0.0) :
-	RequestTag(prev_tag, client, req_params.delta, req_params.rho, time, cost)
+	RequestTag(prev_tag, client, req_params.delta, req_params.rho, req_params.cost, time, cost)
       { /* empty */ }
 
-      RequestTag(double _res, double _prop, double _lim, const Time _arrival) :
+      RequestTag(double _res, double _prop, double _lim, double _bdw, const Time _arrival) :
 	reservation(_res),
 	proportion(_prop),
 	limit(_lim),
+	bandwidth(_bdw),
 	ready(false)
 #ifndef DO_NOT_DELAY_TAG_CALC
 	, arrival(_arrival)
@@ -169,6 +184,7 @@ namespace crimson {
 	reservation(other.reservation),
 	proportion(other.proportion),
 	limit(other.limit),
+	bandwidth(other.bandwidth),
 	ready(other.ready)
 #ifndef DO_NOT_DELAY_TAG_CALC
 	, arrival(other.arrival)
@@ -221,6 +237,7 @@ namespace crimson {
 	  " r:" << format_tag(tag.reservation) <<
 	  " p:" << format_tag(tag.proportion) <<
 	  " l:" << format_tag(tag.limit) <<
+          " b:" << format_tag(tag.bandwidth) <<
 #if 0 // try to resolve this to make sure Time is operator<<'able.
 #ifndef DO_NOT_DELAY_TAG_CALC
 	  " arrival:" << tag.arrival <<
@@ -300,6 +317,7 @@ namespace crimson {
 
 	c::IndIntruHeapData   reserv_heap_data;
 	c::IndIntruHeapData   lim_heap_data;
+	c::IndIntruHeapData   bdw_heap_data;
 	c::IndIntruHeapData   ready_heap_data;
 #if USE_PROP_HEAP
 	c::IndIntruHeapData   prop_heap_data;
@@ -312,17 +330,19 @@ namespace crimson {
 	Counter               last_tick;
 	uint32_t              cur_rho;
 	uint32_t              cur_delta;
+        uint32_t              cur_cost;
 
 	ClientRec(C _client,
 		  const ClientInfo& _info,
 		  Counter current_tick) :
 	  client(_client),
-	  prev_tag(0.0, 0.0, 0.0, TimeZero),
+	  prev_tag(0.0, 0.0, 0.0, 0.0, TimeZero),
 	  info(_info),
 	  idle(true),
 	  last_tick(current_tick),
 	  cur_rho(1),
-	  cur_delta(1)
+	  cur_delta(1),
+          cur_cost(1)
 	{
 	  // empty
 	}
@@ -342,6 +362,7 @@ namespace crimson {
 	  assign_unpinned_tag(prev_tag.reservation, _prev.reservation);
 	  assign_unpinned_tag(prev_tag.limit, _prev.limit);
 	  assign_unpinned_tag(prev_tag.proportion, _prev.proportion);
+          assign_unpinned_tag(prev_tag.bandwidth, _prev.bandwidth);
 	  last_tick = _tick;
 	}
 
@@ -491,6 +512,7 @@ namespace crimson {
 	    resv_heap.adjust(*i.second);
 	    limit_heap.adjust(*i.second);
 	    ready_heap.adjust(*i.second);
+	    bandw_heap.adjust(*i.second);
 #if USE_PROP_HEAP
 	    prop_heap.adjust(*i.second);
 #endif
@@ -535,6 +557,7 @@ namespace crimson {
 	resv_heap.adjust(*i->second);
 	limit_heap.adjust(*i->second);
 	ready_heap.adjust(*i->second);
+	bandw_heap.adjust(*i->second);
 #if USE_PROP_HEAP
 	prop_heap.adjust(*i->second);
 #endif
@@ -562,6 +585,8 @@ namespace crimson {
 	  out << " { ready_top:" << ready << " }";
 	  const auto& limit = q.limit_heap.top();
 	  out << " { limit_top:" << limit << " }";
+          const auto& bandw = q.bandw_heap.top();
+	  out << " { limit_top:" << bandw << " }";
 	} else {
 	  out << " HEAPS-EMPTY";
 	}
@@ -575,6 +600,7 @@ namespace crimson {
 			  bool show_res = true,
 			  bool show_lim = true,
 			  bool show_ready = true,
+                          bool show_bandw = true,
 			  bool show_prop = true) const {
 	auto filter = [](const ClientRec& e)->bool { return true; };
 	DataGuard g(data_mtx);
@@ -586,6 +612,9 @@ namespace crimson {
 	}
 	if (show_ready) {
 	  ready_heap.display_sorted(out << "READY:", filter);
+	}
+        if (show_bandw) {
+	  bandw_heap.display_sorted(out << "BANDW:", filter);
 	}
 #if USE_PROP_HEAP
 	if (show_prop) {
@@ -692,6 +721,13 @@ namespace crimson {
 				    ReadyOption::raises,
 				    true>,
 		      B> ready_heap;
+      c::IndIntruHeap<ClientRecRef,
+		      ClientRec,
+		      &ClientRec::bdw_heap_data,
+		      ClientCompare<&RequestTag::bandwidth,
+				    ReadyOption::lowers,
+				    false>,
+		      B> bandw_heap;
 
       // if all reservations are met and all other requestes are under
       // limit, this will allow the request next in terms of
@@ -771,6 +807,7 @@ namespace crimson {
 	  prop_heap.push(client_rec);
 #endif
 	  limit_heap.push(client_rec);
+	  bandw_heap.push(client_rec);
 	  ready_heap.push(client_rec);
 	  client_map[client_id] = client_rec;
 	  temp_client = &(*client_rec); // address of obj of shared_ptr
@@ -830,7 +867,7 @@ namespace crimson {
 	} // if this client was idle
 
 #ifndef DO_NOT_DELAY_TAG_CALC
-	RequestTag tag(0, 0, 0, time);
+	RequestTag tag(0, 0, 0, 0, time);
 
 	if (!client.has_request()) {
 	  tag = RequestTag(client.get_req_tag(),
@@ -856,6 +893,7 @@ namespace crimson {
 	  resv_heap.adjust(client);
 	  limit_heap.adjust(client);
 	  ready_heap.adjust(client);
+          bandw_heap.adjust(client);
 #if USE_PROP_HEAP
 	  prop_heap.adjust(client);
 #endif
@@ -863,9 +901,11 @@ namespace crimson {
 
 	client.cur_rho = req_params.rho;
 	client.cur_delta = req_params.delta;
+	client.cur_cost = req_params.cost;
 
 	resv_heap.adjust(client);
 	limit_heap.adjust(client);
+	bandw_heap.adjust(client);
 	ready_heap.adjust(client);
 #if USE_PROP_HEAP
 	prop_heap.adjust(client);
@@ -894,7 +934,7 @@ namespace crimson {
 	if (top.has_request()) {
 	  ClientReq& next_first = top.next_request();
 	  next_first.tag = RequestTag(tag, top.info,
-				      top.cur_delta, top.cur_rho,
+				      top.cur_delta, top.cur_rho, top.cur_cost,
 				      next_first.tag.arrival);
 
   	  // copy tag to previous tag for client
@@ -904,6 +944,7 @@ namespace crimson {
 
 	resv_heap.demote(top);
 	limit_heap.adjust(top);
+	bandw_heap.adjust(top);
 #if USE_PROP_HEAP
 	prop_heap.demote(top);
 #endif
@@ -969,12 +1010,27 @@ namespace crimson {
 	auto limits = &limit_heap.top();
 	while (limits->has_request() &&
 	       !limits->next_request().tag.ready &&
-	       limits->next_request().tag.limit <= now) {
+	       limits->next_request().tag.limit <= now &&
+	       limits->next_request().tag.bandwidth <= now) {
 	  limits->next_request().tag.ready = true;
 	  ready_heap.promote(*limits);
 	  limit_heap.demote(*limits);
+	  bandw_heap.demote(*limits);
 
 	  limits = &limit_heap.top();
+	}
+
+	auto bandws = &bandw_heap.top();
+	while (bandws->has_request() &&
+	       !bandws->next_request().tag.ready &&
+	       bandws->next_request().tag.bandwidth <= now &&
+	       bandws->next_request().tag.limit <= now) {
+	  bandws->next_request().tag.ready = true;
+	  ready_heap.promote(*bandws);
+	  bandw_heap.demote(*bandws);
+	  limit_heap.demote(*bandws);
+
+	  bandws = &bandw_heap.top();
 	}
 
 	auto& readys = ready_heap.top();
@@ -1017,6 +1073,11 @@ namespace crimson {
 	  const auto& next = limit_heap.top().next_request();
 	  assert(!next.tag.ready || max_tag == next.tag.proportion);
 	  next_call = min_not_0_time(next_call, next.tag.limit);
+	}
+	if (bandw_heap.top().has_request()) {
+	  const auto& next = bandw_heap.top().next_request();
+	  assert(!next.tag.ready || max_tag == next.tag.proportion);
+	  next_call = min_not_0_time(next_call, next.tag.bandwidth);
 	}
 	if (next_call < TimeMax) {
 	  result.type = NextReqType::future;
@@ -1101,6 +1162,7 @@ namespace crimson {
 #endif
 	delete_from_heap(client, limit_heap);
 	delete_from_heap(client, ready_heap);
+	delete_from_heap(client, bandw_heap);
       }
     }; // class PriorityQueueBase
 

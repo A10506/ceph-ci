@@ -25,29 +25,36 @@ namespace crimson {
     struct ServerInfo {
       Counter   delta_prev_req;
       Counter   rho_prev_req;
+      Counter   cost_prev_req;
       uint32_t  my_delta;
       uint32_t  my_rho;
+      uint32_t  my_cost;
 
       ServerInfo(Counter _delta_prev_req,
-		 Counter _rho_prev_req) :
+                 Counter _rho_prev_req, Counter _cost_prev_req) :
 	delta_prev_req(_delta_prev_req),
 	rho_prev_req(_rho_prev_req),
+        cost_prev_req(_cost_prev_req),
 	my_delta(0),
-	my_rho(0)
+	my_rho(0),
+        my_cost(0)
       {
 	// empty
       }
 
-      inline void req_update(Counter delta, Counter rho) {
+      inline void req_update(Counter delta, Counter rho, Counter cost) {
 	delta_prev_req = delta;
 	rho_prev_req = rho;
+	cost_prev_req = cost;
 	my_delta = 0;
 	my_rho = 0;
+	my_cost = 0;
       }
 
-      inline void resp_update(PhaseType phase) {
+      inline void resp_update(PhaseType phase, uint32_t cost) {
 	++my_delta;
 	if (phase == PhaseType::reservation) ++my_rho;
+        my_cost += cost;
       }
     };
 
@@ -64,6 +71,7 @@ namespace crimson {
 
       Counter                 delta_counter; // # reqs completed
       Counter                 rho_counter;   // # reqs completed via reservation
+      Counter                 cost_bytes;
       std::map<S,ServerInfo>  server_map;
       mutable std::mutex      data_mtx;      // protects Counters and map
 
@@ -88,6 +96,7 @@ namespace crimson {
 		     std::chrono::duration<Rep,Per> _clean_age) :
 	delta_counter(1),
 	rho_counter(1),
+	cost_bytes(1),
 	clean_age(std::chrono::duration_cast<Duration>(_clean_age))
       {
 	cleaning_job =
@@ -111,7 +120,7 @@ namespace crimson {
       /*
        * Incorporates the RespParams received into the various counter.
        */
-      void track_resp(const S& server_id, const PhaseType& phase) {
+      void track_resp(const S& server_id, const PhaseType& phase, Counter cost = 0) {
 	DataGuard g(data_mtx);
 
 	auto it = server_map.find(server_id);
@@ -119,17 +128,18 @@ namespace crimson {
 	  // this code can only run if a request did not precede the
 	  // response or if the record was cleaned up b/w when
 	  // the request was made and now
-	  ServerInfo si(delta_counter, rho_counter);
-	  si.resp_update(phase);
+	  ServerInfo si(delta_counter, rho_counter, cost_bytes);
+	  si.resp_update(phase, uint32_t(cost));
 	  server_map.emplace(server_id, si);
 	} else {
-	  it->second.resp_update(phase);
+	  it->second.resp_update(phase, uint32_t(cost));
 	}
 
 	++delta_counter;
 	if (PhaseType::reservation == phase) {
 	  ++rho_counter;
 	}
+	cost_bytes += cost;
       }
 
 
@@ -140,17 +150,19 @@ namespace crimson {
 	DataGuard g(data_mtx);
 	auto it = server_map.find(server);
 	if (server_map.end() == it) {
-	  server_map.emplace(server, ServerInfo(delta_counter, rho_counter));
-	  return ReqParams(1, 1);
+	  server_map.emplace(server, ServerInfo(delta_counter, rho_counter, cost_bytes));
+	  return ReqParams(1, 1, 1);
 	} else {
 	  Counter delta =
 	    1 + delta_counter - it->second.delta_prev_req - it->second.my_delta;
 	  Counter rho =
 	    1 + rho_counter - it->second.rho_prev_req - it->second.my_rho;
+          Counter cost =
+	    cost_bytes - it->second.cost_prev_req - it->second.my_cost;
 
-	  it->second.req_update(delta_counter, rho_counter);
+	  it->second.req_update(delta_counter, rho_counter, cost_bytes);
 
-	  return ReqParams(uint32_t(delta), uint32_t(rho));
+	  return ReqParams(uint32_t(delta), uint32_t(rho), uint32_t(cost));
 	}
       }
 
