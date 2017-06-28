@@ -218,7 +218,7 @@ namespace ceph {
 
     mClockQueue(
       const typename dmc::PullPriorityQueue<K,T>::ClientInfoFunc& info_func) :
-      queue(info_func, true)
+      queue(info_func, false)
     {
       // empty
     }
@@ -301,6 +301,12 @@ namespace ceph {
       queue.add_request(std::move(item), cl, cost);
     }
 
+    void enqueue_dmc(K cl, unsigned priority, unsigned cost, T item,
+      dmc::ClientInfo info,  dmc::ReqParams para) {
+      /* priority is ignored */
+      queue.add_request(item, cl, info, para, cost);
+    }
+
     void enqueue_front(K cl,
 		       unsigned priority,
 		       unsigned cost,
@@ -335,6 +341,38 @@ namespace ceph {
       auto& retn = pr.get_retn();
       return *(retn.request);
     }
+
+    T dequeue_dmc(bool *from_dmc, dmc::PhaseType *phase) {
+      assert(!empty());
+      assert(from_dmc);
+      *from_dmc = false;
+
+      if (!(high_queue.empty())) {
+        T ret = high_queue.rbegin()->second.front().second;
+        high_queue.rbegin()->second.pop_front();
+        if (high_queue.rbegin()->second.empty()) {
+          high_queue.erase(high_queue.rbegin()->first);
+        }
+        return ret;
+      }
+
+      if (!queue_front.empty()) {
+        T ret = queue_front.front().second;
+        queue_front.pop_front();
+        return ret;
+      }
+
+      auto pr = queue.pull_request();
+      if(pr.is_retn()) {
+        auto& retn = pr.get_retn();
+        *from_dmc = true;
+        *phase = retn.phase;
+        return *(retn.request);
+      } else {
+        T ret = make_pair(spg_t(), PGQueueable());
+        return ret;
+      }
+   }
 
     void dump(ceph::Formatter *f) const override final {
       f->open_array_section("high_queues");
