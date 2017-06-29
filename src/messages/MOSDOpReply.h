@@ -32,7 +32,7 @@
 
 class MOSDOpReply : public Message {
 
-  static const int HEAD_VERSION = 8;
+  static const int HEAD_VERSION = 9;
   static const int COMPAT_VERSION = 2;
 
   object_t oid;
@@ -47,6 +47,7 @@ class MOSDOpReply : public Message {
   int32_t retry_attempt = -1;
   bool do_redirect;
   request_redirect_t redirect;
+  dmc_op_tracker opt;
 
 public:
   const object_t& get_oid() const { return oid; }
@@ -122,6 +123,18 @@ public:
 					       head.client_inc,
 					       head.tid); }
   */
+
+void set_dmc_op_tracker(dmc_op_tracker t) { opt = t; }
+dmc_op_tracker get_dmc_op_tracker() { return opt; }
+void update_op_tracker_cost(uint64_t cost) {
+  opt.cost += cost;
+  return;
+}
+
+uint64_t get_op_cost() {
+  // get op cost for read operation
+  return data.length();
+}
 
 public:
   MOSDOpReply()
@@ -205,6 +218,7 @@ public:
         }
       }
       encode_trace(payload, features);
+      ::encode(opt, payload);
     }
   }
   void decode_payload() override {
@@ -237,6 +251,7 @@ public:
       if (do_redirect)
 	::decode(redirect, p);
       decode_trace(p);
+      ::decode(opt, p);
     } else if (header.version < 2) {
       ceph_osd_reply_head head;
       ::decode(head, p);
@@ -298,6 +313,9 @@ public:
       }
       if (header.version >= 8) {
         decode_trace(p);
+      }
+      if (header.version >= 9) {
+        ::decode(opt, p);
       }
     }
   }

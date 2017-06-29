@@ -1605,6 +1605,14 @@ std::vector<Option> get_global_options() {
     .set_default(false)
     .set_description(""),
 
+    Option("objecter_requests_tracker_history_size", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(64)
+    .set_description(""),
+
+    Option("objecter_dmc_op_cost_from_rados", Option::TYPE_BOOL, Option::LEVEL_DEV)
+    .set_default(false)
+    .set_description(""),
+
     Option("objecter_debug_inject_relock_delay", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
@@ -1978,7 +1986,7 @@ std::vector<Option> get_global_options() {
     .set_description(""),
 
     Option("osd_op_num_shards", Option::TYPE_INT, Option::LEVEL_ADVANCED)
-    .set_default(0)
+    .set_default(5)
     .set_description(""),
 
     Option("osd_op_num_shards_hdd", Option::TYPE_INT, Option::LEVEL_ADVANCED)
@@ -1998,8 +2006,8 @@ std::vector<Option> get_global_options() {
     .set_description("Do not trust stored data_digest (due to previous bug or corruption)"),
 
     Option("osd_op_queue", Option::TYPE_STR, Option::LEVEL_ADVANCED)
-    .set_default("wpq")
-    .set_enum_allowed( { "wpq", "prioritized", "mclock_opclass", "mclock_client", "debug_random" } )
+    .set_default("dmc")
+    .set_enum_allowed( { "wpq", "prioritized", "mclock_opclass", "mclock_client", "dmc", "debug_random" } )
     .set_description("which operation queue algorithm to use")
     .set_long_description("which operation queue algorithm to use; mclock_opclass and mclock_client are currently experimental")
     .add_see_also("osd_op_queue_cut_off"),
@@ -2947,6 +2955,10 @@ std::vector<Option> get_global_options() {
 
     Option("threadpool_empty_queue_max_wait", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(2)
+    .set_description(""),
+
+    Option("threadpool_dmc_queue_poll_delay", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.001)
     .set_description(""),
 
     Option("leveldb_log_to_ceph_log", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
@@ -6005,6 +6017,22 @@ static std::vector<Option> get_rbd_options() {
     Option("rbd_journal_max_payload_bytes", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(16384)
     .set_description("maximum journal payload size before splitting"),
+
+    Option("rbd_client_qos_reservation", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(0)
+    .set_description(""),
+  
+    Option("rbd_client_qos_weight", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(100)
+    .set_description(""),
+  
+    Option("rbd_client_qos_limit", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(0)
+    .set_description(""),
+  
+    Option("rbd_client_qos_bandwidth", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(0)
+    .set_description(""),
 
     Option("rbd_journal_max_concurrent_object_sets", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)

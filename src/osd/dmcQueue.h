@@ -24,7 +24,7 @@
 #include "osd/PGQueueable.h"
 
 #include "common/mClockPriorityQueue.h"
-#include "msg/Message.h"
+#include "messages/MOSDOp.h"
 
 namespace ceph {
 
@@ -124,7 +124,7 @@ namespace ceph {
 
     dmc::ClientInfo fill_in_client_info(dmc_qos_spec qos) {
       return dmc::ClientInfo(qos.reservation, qos.weight,
-                             qos.limit, qos.bandwidth);
+                             qos.limit, qos.bandwidth, qos.version);
     }
 
     dmc::ReqParams fill_in_req_params(dmc_op_tracker opt) {

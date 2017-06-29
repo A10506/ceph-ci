@@ -2173,6 +2173,16 @@ void librados::IoCtx::set_namespace(const string& nspace)
   io_ctx_impl->oloc.nspace = nspace;
 }
 
+void librados::IoCtx::set_qos_quota(int res, int wgt, int lim, int bdw)
+{
+  io_ctx_impl->objecter->update_qos(res, wgt, lim, bdw);
+}
+
+int librados::IoCtx::get_iops()
+{
+  return io_ctx_impl->objecter->get_cur_reqsrate();
+}
+
 int64_t librados::IoCtx::get_id()
 {
   return io_ctx_impl->get_id();
@@ -2358,6 +2368,16 @@ int librados::Rados::service_daemon_update_status(
   const std::map<std::string,std::string>& status)
 {
   return client->service_daemon_update_status(status);
+}
+
+int librados::Rados::update_qos(int rsv, int wgt, int lmt, int bdw)
+{
+  return client->update_qos(rsv, wgt, lmt, bdw);
+}
+
+int librados::Rados::get_iops()
+{
+  return client->get_cur_iops();
 }
 
 int librados::Rados::pool_create(const char *name)
@@ -3021,6 +3041,26 @@ extern "C" int rados_conf_get(rados_t cluster, const char *option, char *buf, si
   md_config_t *conf = client->cct->_conf;
   int retval = conf->get_val(option, &tmp, len);
   tracepoint(librados, rados_conf_get_exit, retval, retval ? "" : option);
+  return retval;
+}
+
+extern "C" int rados_update_qos(rados_t cluster,
+                                     int rsv, int wgt, int lmt, int bdw)
+{
+  tracepoint(librados, rados_update_qos_enter, cluster,
+    rsv, wgt, lmt, bdw);
+  librados::RadosClient *radosp = (librados::RadosClient *)cluster;
+  int retval = radosp->update_qos(rsv, wgt, lmt, bdw);
+  tracepoint(librados, rados_update_qos_exit, retval);
+  return retval;
+}
+
+extern "C" int rados_get_iops(rados_t cluster)
+{
+  tracepoint(librados, rados_get_iops_enter, cluster);
+  librados::RadosClient *radosp = (librados::RadosClient *)cluster;
+  int retval = radosp->get_cur_iops();
+  tracepoint(librados, rados_get_iops_exit, retval);
   return retval;
 }
 

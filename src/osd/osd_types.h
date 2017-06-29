@@ -5306,6 +5306,87 @@ struct obj_list_snap_response_t {
 
 WRITE_CLASS_ENCODER(obj_list_snap_response_t)
 
+/*
+ * dmClock-based QoS Control
+ */
+struct dmc_qos_spec {
+  uint64_t reservation;
+  uint64_t weight;
+  uint64_t limit;
+  uint64_t bandwidth;
+  uint32_t version;      // for qos update online
+
+  dmc_qos_spec(
+    uint64_t _reserv = -1ULL,
+    uint64_t _weight = -1ULL,
+    uint64_t _limit  = -1ULL,
+    uint64_t _bandwd = -1ULL,
+    uint32_t _version = 0)
+    : reservation(_reserv),
+      weight(_weight),
+      limit(_limit),
+      bandwidth(_bandwd),
+      version(_version) {
+    }
+
+  dmc_qos_spec(const dmc_qos_spec &other)
+    : dmc_qos_spec(other.reservation,
+                   other.weight,
+                   other.limit,
+                   other.bandwidth,
+                   other.version) {
+  }
+
+  void encode(bufferlist &bl) const {
+    ENCODE_START(2, 1, bl);
+    ::encode(reservation, bl);
+    ::encode(weight, bl);
+    ::encode(limit, bl);
+    ::encode(bandwidth, bl);
+    ::encode(version, bl);
+    ENCODE_FINISH(bl);
+  }
+
+  void decode(bufferlist::iterator &p) {
+    DECODE_START(2, p);
+    ::decode(reservation, p);
+    ::decode(weight, p);
+    ::decode(limit, p);
+    ::decode(bandwidth, p);
+    if (struct_v >= 2) {
+      ::decode(version, p);
+    }
+    DECODE_FINISH(p);
+  }
+
+  bool valid() const {
+    return reservation != -1ULL && weight != -1ULL
+           && limit != -1ULL && bandwidth != -1ULL
+           && !(reservation == 0 && weight == 0);
+  }
+
+  bool unchanged(const dmc_qos_spec &other) const {
+    // ignore version intentionally
+    return reservation  == other.reservation
+           && weight    == other.weight
+           && limit     == other.limit
+           && bandwidth == other.bandwidth;
+  }
+
+  void assign_qos(const dmc_qos_spec &other) {
+    // ignore version intentionally
+    reservation = other.reservation;
+    weight      = other.weight;
+    limit       = other.limit;
+    bandwidth   = other.bandwidth;
+  }
+
+  void inc_version() {
+    ++version;
+  }
+};
+WRITE_CLASS_ENCODER(dmc_qos_spec)
+
 // PromoteCounter
 
 struct PromoteCounter {

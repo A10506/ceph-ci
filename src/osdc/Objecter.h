@@ -25,6 +25,7 @@
 
 #include <boost/thread/shared_mutex.hpp>
 
+#include "dmclock/src/dmclock_client.h"
 #include "include/assert.h"
 #include "include/buffer.h"
 #include "include/types.h"
@@ -41,6 +42,8 @@
 #include "osd/OSDMap.h"
 
 using namespace std;
+using ServerId = int;
+namespace dmc = crimson::dmclock;
 
 class Context;
 class Messenger;
@@ -1971,7 +1974,7 @@ private:
    * and returned whenever an op is removed from the map
    * If throttle_op needs to throttle it will unlock client_lock.
    */
-  int calc_op_budget(Op *op);
+  int calc_op_budget(Op *op, bool skip_write = false);
   void _throttle_op(Op *op, shunique_lock& sul, int op_size = 0);
   int _take_op_budget(Op *op, shunique_lock& sul) {
     assert(sul && sul.mutex() == &rwlock);
@@ -1998,11 +2001,21 @@ private:
   void put_nlist_context_budget(NListContext *list_context);
   Throttle op_throttle_bytes, op_throttle_ops;
 
+  dmc_qos_spec _get_dmc_qos_spec() {
+    return qos;
+  }
+
+  dmc_op_tracker _get_dmc_op_tracker(ServerId &s) {
+    auto rp = dmc_sertrk.get_req_params(s);
+    return dmc_op_tracker(rp.delta, rp.rho, rp.cost);
+  }
+
  public:
   Objecter(CephContext *cct_, Messenger *m, MonClient *mc,
 	   Finisher *fin,
 	   double mon_timeout,
-	   double osd_timeout) :
+	   double osd_timeout,
+           dmc_qos_spec _qos = dmc_qos_spec()) :
     Dispatcher(cct_), messenger(m), monc(mc), finisher(fin),
     trace_endpoint("0.0.0.0", 0, "Objecter"),
     osdmap(new OSDMap),
@@ -2018,6 +2031,8 @@ private:
 		      cct->_conf->objecter_inflight_op_bytes),
     op_throttle_ops(cct, "objecter_ops", cct->_conf->objecter_inflight_ops),
     epoch_barrier(0),
+    qos(_qos),
+    reqs_stats(cct->_conf->objecter_requests_tracker_history_size),
     retry_writes_after_first_reply(cct->_conf->objecter_retry_writes_after_first_reply)
   { }
   ~Objecter() override;
@@ -2025,6 +2040,9 @@ private:
   void init();
   void start(const OSDMap *o = nullptr);
   void shutdown();
+
+  int update_qos(int res = -1, int wgt = -1, int lim = -1, int bdw = -1);
+  int get_cur_reqsrate();
 
   // These two templates replace osdmap_(get)|(put)_read. Simply wrap
   // whatever functionality you want to use the OSDMap in a lambda like:
@@ -2149,6 +2167,7 @@ public:
   void _dump_active();
   void dump_active();
   void dump_requests(Formatter *fmt);
+  void dump_reqs_rate(Formatter *fmt);
   void _dump_ops(const OSDSession *s, Formatter *fmt);
   void dump_ops(Formatter *fmt);
   void _dump_linger_ops(const OSDSession *s, Formatter *fmt);
@@ -3043,8 +3062,106 @@ public:
 
   void blacklist_self(bool set);
 
+  struct C_Request_Stats {
+
+    std::atomic<uint64_t> num_req_subt;
+    std::atomic<uint64_t> num_req_subt_prev;
+    std::atomic<uint64_t> num_req_done;
+    std::atomic<uint64_t> num_req_done_prev;
+    std::atomic<uint64_t> num_req_done_resv;   //requests done from reservation
+    std::atomic<uint64_t> num_req_resv_prev;
+    std::atomic<uint64_t> num_bytes_done;
+    std::atomic<uint64_t> num_bytes_prev;
+
+    uint32_t rate_req_subt;
+    uint32_t rate_req_subt_peak;
+    uint32_t rate_req_done;
+    uint32_t rate_req_done_peak;
+    uint32_t rate_req_done_resv;
+    uint32_t rate_req_resv_peak;
+    uint32_t rate_bytes_done;
+
+    uint32_t history_idx;
+    uint32_t history_size;
+    std::vector<std::pair<uint32_t, uint32_t>> rate_done_history;
+    std::unique_ptr<crimson::RunEvery> calc_reqsrate_job;
+
+    C_Request_Stats(uint32_t size) :
+      num_req_subt(0), num_req_subt_prev(0),
+      num_req_done(0), num_req_done_prev(0),
+      num_req_done_resv(0), num_req_resv_prev(0),
+      num_bytes_done(0), num_bytes_prev(0),
+      rate_req_subt(0), rate_req_subt_peak(0),
+      rate_req_done(0), rate_req_done_peak(0),
+      rate_req_done_resv(0), rate_bytes_done(0),
+      history_idx(0), history_size(size)
+    {
+      calc_reqsrate_job =
+        std::unique_ptr<crimson::RunEvery>(
+          new crimson::RunEvery(std::chrono::seconds(1),
+            std::bind(&C_Request_Stats::do_reqs_rate, this)));
+
+    };
+
+public:
+    void do_reqs_rate() {
+
+      rate_req_subt = num_req_subt.load() - num_req_subt_prev.load();
+      rate_req_done = num_req_done.load() - num_req_done_prev.load();
+      rate_req_done_resv = num_req_done_resv.load() - num_req_resv_prev.load();
+      rate_bytes_done = num_bytes_done.load() - num_bytes_prev.load();
+
+      rate_req_subt_peak = rate_req_subt_peak < rate_req_subt ?
+        rate_req_subt : rate_req_subt_peak;
+      rate_req_done_peak = rate_req_done_peak < rate_req_done ?
+        rate_req_done : rate_req_done_peak;
+      rate_req_resv_peak = rate_req_resv_peak < rate_req_done_resv ?
+        rate_req_done_resv : rate_req_resv_peak;
+
+      num_req_subt_prev = num_req_subt.load();
+      num_req_done_prev = num_req_done.load();
+      num_req_resv_prev = num_req_done_resv.load();
+      num_bytes_prev    = num_bytes_done.load();
+
+      if (rate_done_history.size() < history_size) {
+        rate_done_history.emplace_back(
+          std::make_pair(rate_req_done, rate_req_done_resv));
+      } else {
+        rate_done_history[history_idx % history_size] =
+          std::make_pair(rate_req_done, rate_req_done_resv);
+      }
+      history_idx++;
+    }
+
+    void dump(Formatter *f) {
+
+      f->open_array_section("history_rate");
+      for (uint32_t i = 0, idx = (history_idx - 1) % history_size;
+        i < rate_done_history.size();
+        i++, idx = (idx == 0 ? history_size - 1 : idx - 1)) {
+
+        uint32_t pro_off, pro_len, ttl_len;
+        std::string layout("rrrrrrrrrrrrrrrrrrrrrrrrrrrrrr");
+        pro_off = rate_req_done_peak ?
+          (int)(rate_done_history[idx].second * 30.0 / rate_req_done_peak) : 0;
+        pro_len = layout.size() - pro_off;
+        layout.replace(pro_off, pro_len, pro_len, 'w');
+        ttl_len = rate_req_done_peak ?
+          (int)(rate_done_history[idx].first * 30.0 / rate_req_done_peak) : 0;
+
+        f->dump_format("", "<%6u,%-6u> %-*.*s",
+          rate_done_history[idx].first, rate_done_history[idx].second,
+          60, ttl_len, layout.c_str());
+      }
+      f->close_section();
+    }
+  };
+
 private:
   epoch_t epoch_barrier;
+  dmc_qos_spec qos;
+  crimson::dmclock::ServiceTracker<ServerId> dmc_sertrk;
+  C_Request_Stats reqs_stats;
   bool retry_writes_after_first_reply;
 public:
   void set_epoch_barrier(epoch_t epoch);

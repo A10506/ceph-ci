@@ -223,6 +223,48 @@ namespace bi = boost::intrusive;
 // XioMessenger diagnostic "ping pong" flag (resend msg when send completes)
 #define MSG_MAGIC_REDUPE       0x0100
 
+struct dmc_op_tracker {
+  uint64_t delta;   // dmc-client specified
+  uint64_t rho;     // dmc-client specified
+  uint64_t cost;
+  uint8_t phase; // dmc-server specified
+
+  dmc_op_tracker (
+    uint64_t _delta = 0,
+    uint64_t _rho = 0,
+    uint64_t _cost = 0,
+    uint8_t _phase = 0xFF) :
+    delta(_delta), rho(_rho), cost(_cost), phase(_phase) {}
+
+  void encode(bufferlist &bl) const {
+    ENCODE_START(1, 1, bl);
+    ::encode(delta, bl);
+    ::encode(rho, bl);
+    ::encode(cost, bl);
+    ::encode(phase, bl);
+    ENCODE_FINISH(bl);
+  }
+
+  void decode(bufferlist::iterator &p) {
+    DECODE_START(1, p);
+    ::decode(delta, p);
+    ::decode(rho, p);
+    ::decode(cost, p);
+    ::decode(phase, p);
+    DECODE_FINISH(p);
+  }
+
+  bool valid() {
+    return (delta != 0 && rho != 0) || phase != 0xFF;
+  }
+};
+
+WRITE_CLASS_ENCODER(dmc_op_tracker)
+
+#define  DMC_OP_PHASE_RESERVATION 0
+#define  DMC_OP_PHASE_PRIORITY    1
+
+
 class Message : public RefCountedObject {
 protected:
   ceph_msg_header  header;      // headerelope

@@ -392,6 +392,7 @@ namespace ceph {
 
       f->open_object_section("queue");
       f->dump_int("size", queue.request_count());
+      queue.dump(f);
       f->close_section();
     } // dump
   };

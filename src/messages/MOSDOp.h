@@ -33,7 +33,7 @@ class OSD;
 
 class MOSDOp : public MOSDFastDispatchOp {
 
-  static const int HEAD_VERSION = 8;
+  static const int HEAD_VERSION = 9;
   static const int COMPAT_VERSION = 3;
 
 private:
@@ -61,6 +61,8 @@ private:
   uint64_t features;
 
   osd_reqid_t reqid; // reqid explicitly set by sender
+  dmc_qos_spec qos;  // QoS requirements specified by sender
+  dmc_op_tracker opt;
 
 public:
   friend class MOSDOpReply;
@@ -242,6 +244,15 @@ public:
     retry_attempt = a;
   }
 
+  void set_dmc_qos_spec(dmc_qos_spec q) { qos = q; }
+  void set_dmc_op_tracker(dmc_op_tracker t) { opt = t; }
+  dmc_qos_spec   get_dmc_qos_spec() { return qos; }
+  dmc_op_tracker get_dmc_op_tracker() { return opt; }
+  void update_op_tracker_cost(uint64_t cost) {
+    opt.cost += cost;
+    return;
+  }
+
   // marshalling
   void encode_payload(uint64_t features) override {
 
@@ -381,6 +392,11 @@ struct ceph_osd_request_head {
 
       ::encode(retry_attempt, payload);
       ::encode(features, payload);
+      
+      //HEAD_VERSION = v9 add for qos
+      ::encode(qos, payload);  // append to end for backward compatibility
+      ::encode(opt, payload);
+
     }
   }
 
@@ -390,6 +406,46 @@ struct ceph_osd_request_head {
 
     // Always keep here the newest version of decoding order/rule
     if (header.version == HEAD_VERSION) {
+      ::decode(pgid, p);      // actual pgid
+      uint32_t hash;
+      ::decode(hash, p); // raw hash value
+      hobj.set_hash(hash);
+      ::decode(osdmap_epoch, p);
+      ::decode(flags, p);
+      ::decode(reqid, p);
+      decode_trace(p);
+      ::decode(client_inc, p);
+      ::decode(mtime, p);
+      object_locator_t oloc;
+      ::decode(oloc, p);
+      ::decode(hobj.oid, p);
+
+      __u16 num_ops;
+      ::decode(num_ops, p);
+      ops.resize(num_ops);
+      for (unsigned i = 0; i < num_ops; i++)
+        ::decode(ops[i].op, p);
+
+      ::decode(hobj.snap, p);
+      ::decode(snap_seq, p);
+      ::decode(snaps, p);
+
+      ::decode(retry_attempt, p);
+
+      ::decode(features, p);
+
+      hobj.pool = pgid.pgid.pool();
+      hobj.set_key(oloc.key);
+      hobj.nspace = oloc.nspace;
+
+      OSDOp::split_osd_op_vector_in_data(ops, data);
+
+      ::decode(qos, p); // We use them early in PG::queue_op, so we decoded them here but not
+      ::decode(opt, p); // in finish_decoded which will be called later by ReplicatedPG::do_op
+
+      final_decode_needed = false;
+  
+    } else if (header.version == 8) {
       ::decode(pgid, p);      // actual pgid
       uint32_t hash;
       ::decode(hash, p); // raw hash value

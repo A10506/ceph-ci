@@ -1639,6 +1639,7 @@ void OSDService::reply_op_error(OpRequestRef op, int err, eversion_t v,
   MOSDOpReply *reply = new MOSDOpReply(m, err, osdmap->get_epoch(), flags,
 				       true);
   reply->set_reply_versions(v, uv);
+  reply->set_dmc_op_tracker(op->get_dmc_op_tracker());
   m->get_connection()->send_message(reply);
 }
 
@@ -10442,6 +10443,16 @@ void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb)
     sdata->sdata_op_ordering_lock.Unlock();
     return;    // OSD shutdown, discard.
   }
+  if (!item.second.is_valid()) {
+    dout(10) << __func__ << " ### dequeue null request? "
+             << "pgid: " << item.first << " " << item.second << dendl;
+    sdata->sdata_op_ordering_lock.Unlock();
+    utime_t t;
+    t.set_from_double(osd->cct->_conf->threadpool_dmc_queue_poll_delay);
+    t.sleep();
+    return;
+  }
+  dout(30) << __func__ << " get_cost " << item.second.get_cost() << dendl;
   PGRef pg;
   uint64_t requeue_seq;
   {
@@ -10705,6 +10716,9 @@ std::ostream& operator<<(std::ostream& out, const OSD::io_queue& q) {
     break;
   case OSD::io_queue::mclock_client:
     out << "mclock_client";
+    break;
+  case OSD::io_queue::dmc:
+    out << "dmc";
     break;
   }
   return out;
