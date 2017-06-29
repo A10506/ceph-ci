@@ -17,6 +17,11 @@
 #include "common/WorkQueue.h"
 #include "librbd/Types.h"
 
+#define QOS_FLAG_RSV    (1 << 3)
+#define QOS_FLAG_WGT    (1 << 2)
+#define QOS_FLAG_LMT    (1 << 1)
+#define QOS_FLAG_BDW    (1 << 0)
+
 namespace librbd {
 
   struct ImageCtx;
@@ -170,7 +175,14 @@ namespace librbd {
   int poll_io_events(ImageCtx *ictx, io::AioCompletion **comps, int numcomp);
   int metadata_list(ImageCtx *ictx, const string &last, uint64_t max, map<string, bufferlist> *pairs);
   int metadata_get(ImageCtx *ictx, const std::string &key, std::string *value);
-
+  int rbd_cache_disable(ImageCtx *ictx);
+  int rbd_cache_remove(ImageCtx *ictx);
+  int qos_spec_set(ImageCtx *ictx,
+                       int rsv = -1, int wgt = -1, int lmt = -1, int bdw = -1);
+  int qos_spec_get(ImageCtx *ictx,
+                       int *rsv = nullptr, int *wgt = nullptr, int *lmt = nullptr, int *bdw = nullptr,
+                       int *mflag = nullptr);
+  int qos_spec_del(ImageCtx *ictx, int flag = 0x0F);
 }
 
 #endif

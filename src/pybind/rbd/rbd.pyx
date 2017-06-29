@@ -349,6 +349,16 @@ cdef extern from "rbd/librbd.h" nogil:
     int rbd_metadata_list(rbd_image_t image, const char *start, uint64_t max,
                           char *keys, size_t *key_len, char *values,
                           size_t *vals_len)
+    int64_t rbd_get_io_rate(rbd_image_t image)
+    int64_t rbd_get_byte_rate(rbd_image_t image)
+    int rbd_cache_disable(rbd_image_t image)
+    int rbd_cache_remove(rbd_image_t image)
+    int rbd_qos_set(rbd_image_t image,
+                    int reservation, int weight, int limit, int bandwidth)
+    int rbd_qos_get(rbd_image_t image,
+                    int *reservation, int *weight, int *limit, int *bandwidth,
+                    int *metaflag)
+    int rbd_qos_del(rbd_image_t image, int flag)
 
 RBD_FEATURE_LAYERING = _RBD_FEATURE_LAYERING
 RBD_FEATURE_STRIPINGV2 = _RBD_FEATURE_STRIPINGV2
@@ -2422,6 +2432,154 @@ written." % (self.name, ret, length))
             ret = rbd_break_lock(self.image, _client, _cookie)
         if ret < 0:
             raise make_ex(ret, 'error unlocking image')
+
+    def qos_set(self, reservation, weight, limit, bandwidth):
+        """
+        Set QoS values for the image.
+        """
+        cdef:
+            int rsv = reservation
+            int wgt = weight
+            int lmt = limit
+            int bdw = bandwidth
+        with nogil:
+            ret = rbd_qos_set(self.image, rsv, wgt, lmt, bdw)
+        if ret < 0:
+            raise make_ex(ret, 'error set image %s qos values' %
+                         (self.name,))
+
+    def qos_get(self):
+        """
+        Get QoS values of the image.
+        """
+        cdef:
+            int rsv = -1
+            int wgt = -1
+            int lmt = -1
+            int bdw = -1
+            int mflag = -1
+        with nogil:
+            ret = rbd_qos_get(self.image, &rsv, &wgt, &lmt, &bdw, &mflag)
+        if ret < 0:
+            raise make_ex(ret, 'error set image %s qos values' % (self.name,))
+
+        return {
+            'reservation'     : rsv,
+            'weight'          : wgt,
+            'limit'           : lmt,
+            'bandwidth'       : bdw,
+            'mflag'           : mflag
+            }
+
+    def qos_remove(self):
+        """
+        Delete QoS values of the image.
+        """
+        with nogil:
+            ret = rbd_qos_del(self.image, 0x8f)
+        if ret < 0 and ret != -errno.ENOENT:
+            raise make_ex(ret, 'error delete image %s qos values' % (self.name,))
+
+    def qos_iops_set_weight(self, weight):
+        """
+        Set QoS weight value for the image.
+        """
+        cdef:
+            int wgt = weight
+        with nogil:
+            ret = rbd_qos_set(self.image, -1, wgt, -1, -1)
+        if ret < 0:
+            raise make_ex(ret, 'error set image %s qos weight value' %
+                         (self.name,))
+
+    def qos_iops_del_weight(self):
+        """
+        Delete QoS iops weight value of the image.
+        """
+        with nogil:
+            ret = rbd_qos_del(self.image, 0x04)
+        if ret < 0 and ret != -errno.ENOENT:
+            raise make_ex(ret, 'error delete image %s qos iops weight value' % (self.name,))
+
+    def qos_iops_set_limit(self, limit):
+        """
+        Set QoS limit value for the image.
+        """
+        cdef:
+            int lmt = limit
+        with nogil:
+            ret = rbd_qos_set(self.image, -1, -1, lmt, -1)
+        if ret < 0:
+            raise make_ex(ret, 'error set image %s qos limit value' %
+                         (self.name,))
+
+    def qos_iops_del_limit(self):
+        """
+        Delete QoS iops limit value of the image.
+        """
+        with nogil:
+            ret = rbd_qos_del(self.image, 0x02)
+        if ret < 0 and ret != -errno.ENOENT:
+            raise make_ex(ret, 'error delete image %s qos iops limit value' % (self.name,))
+
+    def qos_bandw_set(self, bandwith):
+        """
+        Set QoS bandw values for the image.
+        """
+        cdef:
+            int bandw = bandwith
+        with nogil:
+            ret = rbd_qos_set(self.image, -1, -1, -1, bandw)
+        if ret < 0:
+            raise make_ex(ret, 'error set image %s qos bandw values' %
+                         (self.name,))
+
+    def qos_bandw_remove(self):
+        """
+        Delete QoS bandw values of the image.
+        """
+        with nogil:
+            ret = rbd_qos_del(self.image, 0x1)
+        if ret < 0 and ret != -errno.ENOENT:
+            raise make_ex(ret, 'error delete image %s qos bandw values' % (self.name,))
+
+    def qos_rbdcache_set_disable(self):
+        """
+        Set rbd cache to false.
+        """
+        with nogil:
+            ret = rbd_cache_disable(self.image)
+        if ret < 0:
+            raise make_ex(ret, 'error set image %s rbd cache to false' % (self.name,))
+
+    def qos_rbdcache_unset_disable(self):
+        """
+        Unset rbd cache to false.
+        """
+        with nogil:
+            ret = rbd_cache_remove(self.image)
+        if ret < 0 and ret != -errno.ENOENT:
+            raise make_ex(ret, 'error unset image %s rbd cache to false' % (self.name,))
+
+    def qos_get_rate(self, rate_type = ''):
+        """
+        Get QoS rate of the image.
+        """
+        with nogil:
+            iops = rbd_get_io_rate(self.image)
+        with nogil:
+            bandwidth = rbd_get_byte_rate(self.image)
+        if rate_type == 'iops':
+            return iops
+        elif rate_type == 'bandwidth':
+            return bandwidth
+        elif rate_type == '':
+            return {
+                'iops'     : iops,
+                'bandwidth': bandwidth
+            }
+        else:
+            raise make_ex(-errno.EINVAL, 'error rate type %s ' % (rate_type,))
 
     def mirror_image_enable(self):
         """

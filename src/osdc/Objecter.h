@@ -2042,7 +2042,8 @@ private:
   void shutdown();
 
   int update_qos(int res = -1, int wgt = -1, int lim = -1, int bdw = -1);
-  int get_cur_reqsrate();
+  uint32_t get_cur_reqsrate();
+  uint32_t get_cur_bytesrate();
 
   // These two templates replace osdmap_(get)|(put)_read. Simply wrap
   // whatever functionality you want to use the OSDMap in a lambda like:

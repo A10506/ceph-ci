@@ -83,14 +83,6 @@ librados::RadosClient::RadosClient(CephContext *cct_)
 {
 }
 
-int librados::RadosClient::update_qos(int rsv, int wgt, int lmt, int bdw) {
-  return objecter->update_qos(rsv, wgt, lmt, bdw);
-}
-
-int librados::RadosClient::get_cur_iops() {
-  return objecter->get_cur_reqsrate();
-}
-
 int64_t librados::RadosClient::lookup_pool(const char *name)
 {
   int r = wait_for_osdmap();

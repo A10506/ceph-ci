@@ -259,8 +259,12 @@ int Objecter::update_qos(int res, int wgt, int lim, int bdw) {
   return 0;
 }
 
-int Objecter::get_cur_reqsrate() {
+uint32_t Objecter::get_cur_reqsrate() {
   return reqs_stats.rate_req_done;
+}
+
+uint32_t Objecter::get_cur_bytesrate() {
+  return reqs_stats.rate_bytes_done;
 }
 
 

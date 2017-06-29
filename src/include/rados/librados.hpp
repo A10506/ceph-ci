@@ -1236,8 +1236,8 @@ namespace librados
     void set_namespace(const std::string& nspace);
 
     void set_qos_quota(int res, int wgt, int lim, int bdw);
-    int  get_iops();
-
+    uint32_t get_qos_io_rate();
+    uint32_t get_qos_byte_rate();
     int64_t get_id();
 
     // deprecated versions
@@ -1323,8 +1323,6 @@ namespace librados
       const std::map<std::string,std::string>& metadata); ///< static metadata about daemon
     int service_daemon_update_status(
       const std::map<std::string,std::string>& status);
-    int get_iops();
-    int update_qos(int rsv, int wgt, int lmt, int bdw);
 
     int pool_create(const char *name);
     int pool_create(const char *name, uint64_t auid);

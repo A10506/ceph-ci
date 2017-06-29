@@ -200,7 +200,11 @@ struct C_InvalidateCache : public Context {
       exclusive_lock(nullptr), object_map(nullptr),
       io_work_queue(nullptr), op_work_queue(nullptr),
       asok_hook(nullptr),
-      trace_endpoint("librbd")
+      trace_endpoint("librbd"),
+      client_qos_reservation(cct->_conf->rbd_client_qos_reservation),
+      client_qos_weight(cct->_conf->rbd_client_qos_weight),
+      client_qos_limit(cct->_conf->rbd_client_qos_limit),
+      client_qos_bandwidth(cct->_conf->rbd_client_qos_bandwidth)
   {
     md_ctx.dup(p);
     data_ctx.dup(p);
@@ -1018,7 +1022,11 @@ struct C_InvalidateCache : public Context {
         "rbd_journal_max_concurrent_object_sets", false)(
         "rbd_mirroring_resync_after_disconnect", false)(
         "rbd_mirroring_replay_delay", false)(
-        "rbd_skip_partial_discard", false);
+        "rbd_skip_partial_discard", false)(
+        "rbd_client_qos_reservation", false)(
+        "rbd_client_qos_weight", false)(
+        "rbd_client_qos_limit", false)(
+        "rbd_client_qos_bandwidth", false);
 
     md_config_t local_config_t;
     std::map<std::string, bufferlist> res;
@@ -1087,6 +1095,11 @@ struct C_InvalidateCache : public Context {
     if (sparse_read_threshold_bytes == 0) {
       sparse_read_threshold_bytes = get_object_size();
     }
+    ASSIGN_OPTION(client_qos_reservation, int64_t);
+    ASSIGN_OPTION(client_qos_weight, int64_t);
+    ASSIGN_OPTION(client_qos_limit, int64_t);
+    ASSIGN_OPTION(client_qos_bandwidth, int64_t);
+
   }
 
   ExclusiveLock<ImageCtx> *ImageCtx::create_exclusive_lock() {
@@ -1169,4 +1182,70 @@ struct C_InvalidateCache : public Context {
     *timer = safe_timer_singleton;
     *timer_lock = &safe_timer_singleton->lock;
   }
+
+  int ImageCtx::get_image_perf(int64_t *pio, int64_t *pio_r, int64_t *pio_w,
+                               int64_t *pbdw, int64_t *pbdw_r, int64_t *pbdw_w) {
+    librados::Rados rados(md_ctx);
+    string fullid   = std::to_string(md_ctx.get_id()) + "." + id;
+
+    bufferlist inbl, outbl;
+    int r = rados.mgr_command("{\"prefix\": \"mgr dump imgs_perf\","
+                              "\"dumpcontents\": \"" + fullid + "\"}",
+                              inbl, &outbl, NULL);
+    if (r < 0) {
+      ldout(cct, 0) << __func__ << " send mgr_command failed: "
+                    << cpp_strerror(r) << dendl;
+      return r;
+    }
+
+    string outstr(outbl.c_str(), outbl.length());
+    ldout(cct, 20) << __func__ << " outstr: " << outstr << dendl;
+    if (outstr.find(fullid) == string::npos) {
+      ldout(cct, 1) << __func__ << " can not find image: " << fullid << dendl;
+      return -ENOENT;
+    }
+
+    string simgdata = outstr.substr(outstr.find(fullid));
+    std::istringstream iss(simgdata);
+    string id, iops, iops_r, iops_w, sep, bytes, bytes_r, bytes_w;
+    iss >> id >> iops >> iops_r >> iops_w >> sep
+        >> bytes >> bytes_r >> bytes_w;
+    if (pio)
+      *pio    = (int64_t)atoi(iops.c_str());
+    if (pio_r)
+      *pio_r  = (int64_t)atoi(iops_r.c_str());
+    if (pio_w)
+      *pio_w  = (int64_t)atoi(iops_w.c_str());
+    if (pbdw)
+      *pbdw   = (int64_t)atoi(bytes.c_str());
+    if (pbdw_r)
+      *pbdw_r = (int64_t)atoi(bytes_r.c_str());
+    if (pbdw_w)
+      *pbdw_w = (int64_t)atoi(bytes_w.c_str());
+
+    return 0;
+  }
+
+  int ImageCtx::set_qos_quota(int res, int wgt, int lim, int bdw) {
+    if (res < 0 || wgt < 0 || lim < 0 || bdw < 0) {
+      ldout(cct, 0) << "Invalid QoS parameters: [ "
+                    << res << ", " << wgt << ", " << lim << " ]" << dendl;
+      return -1;
+    } else if (res || wgt || lim || bdw) {
+      data_ctx.set_qos_quota(res, wgt, lim, bdw);
+    } else {
+      ldout(cct, 5) << "Use default QoS parameters: [ "
+                    << client_qos_reservation << ", "
+                    << client_qos_weight << ", "
+                    << client_qos_limit << ", "
+                    << client_qos_bandwidth << " ]" << dendl;
+
+      data_ctx.set_qos_quota(client_qos_reservation,
+                             client_qos_weight,
+                             client_qos_limit,
+                             client_qos_bandwidth);
+    }
+    return 0;
+  }
+
 }
