@@ -2417,12 +2417,6 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
     }
   }
 
-  static const std::string QOS_MRSV("conf_rbd_client_qos_reservation");
-  static const std::string QOS_MWGT("conf_rbd_client_qos_weight");
-  static const std::string QOS_MLMT("conf_rbd_client_qos_limit");
-  static const std::string QOS_MBDW("conf_rbd_client_qos_bandwidth");
-  static const std::string RBD_CACHE("conf_rbd_cache");
-
   int qos_param_check(int reservation, int weight, int limit, int bandwidth) {
     if (reservation < 0 && weight < 0 && limit < 0
         && bandwidth < 0) {
@@ -2454,34 +2448,11 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
     if (r < 0) {
       return r;
     }
-    if (rsv >= 0) {
-      string srsv = std::to_string(rsv);
-      r = ictx->operations->metadata_set(QOS_MRSV, srsv.c_str());
-      if (r < 0) {
-        return r;
-      }
+    r = ictx->operations->qos_update(rsv, wgt, lmt, bdw);
+    if (r < 0) {
+      return r;
     }
-    if (wgt >= 0) {
-      string swgt = std::to_string(wgt);
-      r = ictx->operations->metadata_set(QOS_MWGT, swgt.c_str());
-      if (r < 0) {
-        return r;
-      }
-    }
-    if (lmt >= 0) {
-      string slmt = std::to_string(lmt);
-      r = ictx->operations->metadata_set(QOS_MLMT, slmt.c_str());
-      if (r < 0) {
-        return r;
-      }
-    }
-    if (bdw >= 0) {
-      string sbdw = std::to_string(bdw);
-      r = ictx->operations->metadata_set(QOS_MBDW, sbdw.c_str());;
-      if (r < 0) {
-        return r;
-      }
-    }
+
     return 0;
   }
 
@@ -2554,29 +2525,9 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
 
   int qos_spec_del(ImageCtx *ictx, int flag)
   {
-    if (flag & QOS_FLAG_RSV) {
-      int r = ictx->operations->metadata_remove(QOS_MRSV);
-      if (r < 0) {
-        return r;
-      }
-    }
-    if (flag & QOS_FLAG_WGT) {
-      int r = ictx->operations->metadata_remove(QOS_MWGT);
-      if (r < 0) {
-        return r;
-      }
-    }
-    if (flag & QOS_FLAG_LMT) {
-      int r = ictx->operations->metadata_remove(QOS_MLMT);
-      if (r < 0) {
-        return r;
-      }
-    }
-    if (flag & QOS_FLAG_BDW) {
-      int r = ictx->operations->metadata_remove(QOS_MBDW);
-      if (r < 0) {
-        return r;
-      }
+    int r = ictx->operations->qos_remove(flag);
+    if (r < 0) {
+      return r;
     }
     return 0;
   }

@@ -39,7 +39,10 @@ public:
 
   int rename(const char *dstname);
   void execute_rename(const std::string &dest_name, Context *on_finish);
-
+  int qos_update(int rsv, int wgt, int lmt, int bdw);
+  void execute_qos_update(int rsv, int wgt, int lmt, int bdw, Context *on_finish);
+  int qos_remove(int flag);
+  void execute_qos_remove(int flag, Context *on_finish);
   int resize(uint64_t size, bool allow_shrink, ProgressContext& prog_ctx);
   void execute_resize(uint64_t size, bool allow_shrink, ProgressContext &prog_ctx,
                       Context *on_finish, uint64_t journal_op_tid);

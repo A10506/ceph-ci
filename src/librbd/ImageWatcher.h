@@ -61,7 +61,8 @@ public:
   void notify_rebuild_object_map(uint64_t request_id,
                                  ProgressContext &prog_ctx, Context *on_finish);
   void notify_rename(const std::string &image_name, Context *on_finish);
-
+  void notify_qos_update(int rsv, int wgt, int lmt, int bdw, Context *on_finish);
+  void notify_qos_remove(int flag, Context *on_finish);
   void notify_update_features(uint64_t features, bool enabled,
                               Context *on_finish);
 
@@ -230,6 +231,10 @@ private:
   bool handle_payload(const watch_notify::RebuildObjectMapPayload& payload,
                       C_NotifyAck *ctx);
   bool handle_payload(const watch_notify::RenamePayload& payload,
+                      C_NotifyAck *ctx);
+  bool handle_payload(const watch_notify::QosUpdatePayload& payload,
+                      C_NotifyAck *ctx);
+  bool handle_payload(const watch_notify::QosRemovePayload& payload,
                       C_NotifyAck *ctx);
   bool handle_payload(const watch_notify::UpdateFeaturesPayload& payload,
                       C_NotifyAck *ctx);

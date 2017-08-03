@@ -249,6 +249,39 @@ void RenamePayload::dump(Formatter *f) const {
   f->dump_string("image_name", image_name);
 }
 
+void QosUpdatePayload::encode(bufferlist &bl) const {
+  ::encode(reservation, bl);
+  ::encode(weight, bl);
+  ::encode(limit, bl);
+  ::encode(bandwidth, bl);
+}
+
+void QosUpdatePayload::decode(__u8 version, bufferlist::iterator &iter) {
+  ::decode(reservation, iter);
+  ::decode(weight, iter);
+  ::decode(limit, iter);
+  ::decode(bandwidth, iter);
+}
+
+void QosUpdatePayload::dump(Formatter *f) const {
+  f->dump_int("reservation", reservation);
+  f->dump_int("weight", reservation);
+  f->dump_int("limit", reservation);
+  f->dump_int("bandwidth", reservation);
+}
+
+void QosRemovePayload::encode(bufferlist &bl) const {
+  ::encode(flag, bl);
+}
+
+void QosRemovePayload::decode(__u8 version, bufferlist::iterator &iter) {
+  ::decode(flag, iter);
+}
+
+void QosRemovePayload::dump(Formatter *f) const {
+  f->dump_int("flag", flag);
+}
+
 void UpdateFeaturesPayload::encode(bufferlist &bl) const {
   ::encode(features, bl);
   ::encode(enabled, bl);
@@ -339,6 +372,12 @@ void NotifyMessage::decode(bufferlist::iterator& iter) {
     break;
   case NOTIFY_OP_UPDATE_FEATURES:
     payload = UpdateFeaturesPayload();
+    break;
+  case NOTIFY_OP_QOS_UPDATE:
+    payload = QosUpdatePayload();
+    break;
+  case NOTIFY_OP_QOS_REMOVE:
+    payload = QosRemovePayload();
     break;
   default:
     payload = UnknownPayload();

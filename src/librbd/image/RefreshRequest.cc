@@ -17,6 +17,8 @@
 #include "librbd/image/RefreshParentRequest.h"
 #include "librbd/io/ImageRequestWQ.h"
 #include "librbd/journal/Policy.h"
+#include <boost/algorithm/string/predicate.hpp>
+#include "include/assert.h"
 
 #define dout_subsys ceph_subsys_rbd
 #undef dout_prefix
@@ -346,10 +348,12 @@ Context *RefreshRequest<I>::handle_v2_get_metadata(int *result) {
   }
 
   m_image_ctx.apply_metadata(m_metadata, false);
+  m_image_ctx.set_qos_quota();
 
   send_v2_get_flags();
   return nullptr;
 }
+
 
 template <typename I>
 void RefreshRequest<I>::send_v2_get_flags() {

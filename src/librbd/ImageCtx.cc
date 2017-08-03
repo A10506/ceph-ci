@@ -1228,13 +1228,13 @@ struct C_InvalidateCache : public Context {
 
   int ImageCtx::set_qos_quota(int res, int wgt, int lim, int bdw) {
     if (res < 0 || wgt < 0 || lim < 0 || bdw < 0) {
-      ldout(cct, 0) << "Invalid QoS parameters: [ "
+      ldout(cct, 0) << __func__ << " invalid qos spec [ "
                     << res << ", " << wgt << ", " << lim << " ]" << dendl;
       return -1;
     } else if (res || wgt || lim || bdw) {
       data_ctx.set_qos_quota(res, wgt, lim, bdw);
     } else {
-      ldout(cct, 5) << "Use default QoS parameters: [ "
+      ldout(cct, 5) << __func__ << " setting " << this << " qos spec to [ "
                     << client_qos_reservation << ", "
                     << client_qos_weight << ", "
                     << client_qos_limit << ", "

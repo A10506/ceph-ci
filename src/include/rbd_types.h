@@ -107,6 +107,17 @@
 
 #define RBD_TRASH "rbd_trash"
 
+#define QOS_FLAG_RSV    (1 << 3)
+#define QOS_FLAG_WGT    (1 << 2)
+#define QOS_FLAG_LMT    (1 << 1)
+#define QOS_FLAG_BDW    (1 << 0)
+
+#define QOS_MRSV  "conf_rbd_client_qos_reservation"
+#define QOS_MWGT  "conf_rbd_client_qos_weight"
+#define QOS_MLMT  "conf_rbd_client_qos_limit"
+#define QOS_MBDW  "conf_rbd_client_qos_bandwidth"
+#define RBD_CACHE "conf_rbd_cache"
+
 struct rbd_info {
 	__le64 max_id;
 } __attribute__ ((packed));

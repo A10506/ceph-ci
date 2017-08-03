@@ -17,11 +17,6 @@
 #include "common/WorkQueue.h"
 #include "librbd/Types.h"
 
-#define QOS_FLAG_RSV    (1 << 3)
-#define QOS_FLAG_WGT    (1 << 2)
-#define QOS_FLAG_LMT    (1 << 1)
-#define QOS_FLAG_BDW    (1 << 0)
-
 namespace librbd {
 
   struct ImageCtx;

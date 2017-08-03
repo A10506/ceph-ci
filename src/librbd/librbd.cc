@@ -4171,7 +4171,8 @@ extern "C" int rbd_qos_set(rbd_image_t image,
   if (r < 0) {
     return r;
   }
-  return librbd::rbd_cache_disable(ictx);
+  //return librbd::rbd_cache_disable(ictx);
+  return 0;
 }
 
 extern "C" int rbd_qos_get(rbd_image_t image,
