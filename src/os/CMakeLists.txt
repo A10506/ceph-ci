@@ -34,6 +34,7 @@ if(HAVE_LIBAIO)
     bluestore/BitMapAllocator.cc
     bluestore/BitAllocator.cc
     bluestore/aio.cc
+    bluestore/avl.c
   )
 endif(HAVE_LIBAIO)
 
