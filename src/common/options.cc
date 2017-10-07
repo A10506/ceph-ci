@@ -3663,7 +3663,7 @@ std::vector<Option> get_global_options() {
 
     Option("bluestore_allocator", Option::TYPE_STR, Option::LEVEL_DEV)
     .set_default("stupid")
-    .set_enum_allowed({"bitmap", "stupid"})
+    .set_enum_allowed({"bitmap", "stupid", "avl"})
     .set_description("Allocator policy"),
 
     Option("bluestore_freelist_blocks_per_key", Option::TYPE_INT, Option::LEVEL_DEV)
