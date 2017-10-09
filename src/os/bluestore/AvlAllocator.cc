@@ -346,20 +346,14 @@ int64_t AvlAllocator::allocate(
   return -ENOSPC;
 }
 
-void AvlAllocator::release(const interval_set<uint64_t>& release_set)
+void AvlAllocator::release(uint64_t offset, uint64_t length)
 {
   std::lock_guard<std::mutex> l(lock);
-  for (interval_set<uint64_t>::const_iterator p = release_set.begin();
-       p != release_set.end();
-       ++p) {
-    const auto offset = p.get_start();
-    const auto length = p.get_len();
-    ldout(cct, 10) << __func__ << std::hex
-                   << " offset 0x" << offset
-                   << " length 0x" << length
-                   << std::dec << dendl;
-    _add_to_tree(offset, length);
-  }
+  ldout(cct, 10) << __func__ << std::hex
+                 << " offset 0x" << offset
+                 << " length 0x" << length
+                 << std::dec << dendl;
+  _add_to_tree(offset, length);
 }
 
 uint64_t AvlAllocator::get_free()
