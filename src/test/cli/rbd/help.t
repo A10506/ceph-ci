@@ -127,7 +127,7 @@ Skip test on FreeBSD as it generates different output there.
     --io-type arg        IO type (read or write)
   
   rbd help children
-  usage: rbd children [--pool <pool>] [--image <image>] [--snap <snap>] 
+  usage: rbd children [--pool <pool>] [--image <image>] [--snap <snap>] [--all] 
                       [--format <format>] [--pretty-format] 
                       <snap-spec> 
   
@@ -141,6 +141,7 @@ Skip test on FreeBSD as it generates different output there.
     -p [ --pool ] arg    pool name
     --image arg          image name
     --snap arg           snapshot name
+    -a [ --all ]         list all children of snapshot (include trash)
     --format arg         output format (plain, json, or xml) [default: plain]
     --pretty-format      pretty formatting (json and xml)
   
