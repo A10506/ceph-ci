@@ -50,6 +50,9 @@
 #include "profile.h"
 #endif
 
+#ifndef DO_NOT_DELAY_TAG_CALC
+#define DO_NOT_DELAY_TAG_CALC 1
+#endif
 
 namespace crimson {
 
