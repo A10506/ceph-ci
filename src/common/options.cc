@@ -2950,6 +2950,10 @@ std::vector<Option> get_global_options() {
     .set_default(64)
     .set_description(""),
 
+    Option("osd_fast_shutdown_on_device_gone", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(true)
+    .set_description(""),
+
     Option("threadpool_default_timeout", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(60)
     .set_description(""),

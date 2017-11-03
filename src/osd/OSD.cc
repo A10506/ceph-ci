@@ -952,6 +952,21 @@ osd_stat_t OSDService::set_osd_stat(const struct store_statfs_t &stbuf,
   }
 }
 
+void OSDService::os_tick()
+{
+  int r = osd->store->tick();
+  if (r < 0) {
+    derr << __func__ << " underlying ObjectStore tick() failed: "
+         << cpp_strerror(r) << dendl;
+    if ((r == -ENOENT || r == -EIO) &&
+        cct->_conf->get_val<bool>("osd_fast_shutdown_on_device_gone")) {
+      // trigger shutdown in a different thread
+      derr << __func__ << " shutdown OSD via async signal" << dendl;
+      queue_async_signal(SIGINT);
+    }
+  }
+}
+
 void OSDService::update_osd_stat(vector<int>& hb_peers)
 {
   // load osd stats first
@@ -5323,6 +5338,8 @@ void OSD::tick()
   assert(osd_lock.is_locked());
   dout(10) << "tick" << dendl;
 
+  service.os_tick();
+
   if (is_active() || is_waiting_for_healthy()) {
     maybe_update_heartbeat_peers();
   }
@@ -5348,6 +5365,7 @@ void OSD::tick_without_osd_lock()
   dout(10) << "tick_without_osd_lock" << dendl;
 
   load_balancer.sample();
+  service.os_tick();
 
   logger->set(l_osd_buf, buffer::get_total_alloc());
   logger->set(l_osd_history_alloc_bytes, SHIFT_ROUND_UP(buffer::get_history_alloc_bytes(), 20));

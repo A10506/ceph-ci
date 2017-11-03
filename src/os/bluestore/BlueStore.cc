@@ -6215,6 +6215,19 @@ void BlueStore::collect_metadata(map<string,string> *pm)
   }
 }
 
+int BlueStore::tick() const
+{
+  int fd = ::openat(path_fd, "block", O_RDONLY, 0644);
+  if (fd < 0) {
+    int r = -errno;
+    derr << __func__ << " open main device error: "
+         << cpp_strerror(r) << dendl;
+    return r;
+  }
+  VOID_TEMP_FAILURE_RETRY(::close(fd));
+  return 0;
+}
+
 int BlueStore::statfs(struct store_statfs_t *buf)
 {
   buf->reset();

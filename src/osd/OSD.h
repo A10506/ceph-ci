@@ -1079,6 +1079,7 @@ public:
   uint32_t seq = 0;
 
   void update_osd_stat(vector<int>& hb_peers);
+  void os_tick();
   osd_stat_t set_osd_stat(const struct store_statfs_t &stbuf,
                           vector<int>& hb_peers,
 			  int num_pgs);
