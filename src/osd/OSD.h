@@ -61,6 +61,9 @@ using namespace std;
 #include "messages/MOSDOp.h"
 #include "include/Spinlock.h"
 #include "common/EventTrace.h"
+#include "dmclock/src/dmclock_client.h"
+using ServerId = int;
+
 
 #define CEPH_OSD_PROTOCOL    10 /* cluster internal */
 
@@ -1212,6 +1215,8 @@ public:
                           const std::set <std::string> &changed) override;
   void update_log_config();
   void check_config();
+  void maybe_update_queue_config(const struct md_config_t *conf,
+                                 const std::set <std::string> &changed);
 
 protected:
 
@@ -1609,6 +1614,11 @@ private:
   friend struct C_CompleteSplits;
   friend struct C_OpenPGs;
 
+  // -- dmc service tracker --
+  dmc::ServiceTracker<ServerId> opwq_tracker;
+  void update_opwq_tracker(OpRequestRef& op, ServerId& srv);
+  dmc_op_tracker get_dmc_op_tracker(ServerId& srv);
+
   // -- op queue --
   enum class io_queue {
     prioritized,
@@ -1792,6 +1802,16 @@ private:
 	f->open_object_section(lock_name);
 	sdata->pqueue->dump(f);
 	f->close_section();
+	sdata->sdata_op_ordering_lock.Unlock();
+      }
+    }
+
+    void update_queue_config(const string item, const string value) {
+      for(uint32_t i = 0; i < num_shards; i++) {
+	ShardData* sdata = shard_list[i];
+	assert (NULL != sdata);
+	sdata->sdata_op_ordering_lock.Lock();
+	sdata->pqueue->update_config(item, value);
 	sdata->sdata_op_ordering_lock.Unlock();
       }
     }

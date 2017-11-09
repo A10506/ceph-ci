@@ -37,7 +37,7 @@ namespace ceph {
   // osd_op_type_t. So this adpater class will transform calls
   // appropriately.
   class mClockClientQueue : public OpQueue<Request, Client> {
-
+public:
     enum class osd_op_type_t {
       client_op, osd_subop, bg_snaptrim, bg_recovery, bg_scrub };
 
@@ -143,4 +143,27 @@ namespace ceph {
     InnerClient get_inner_client(const Client& cl, const Request& request);
   }; // class mClockClientAdapter
 
+  inline ostream& operator<<(ostream& out,
+    const mClockClientQueue::InnerClient& client) {
+    switch(client.second) {
+    case mClockClientQueue::osd_op_type_t::client_op:
+      out << "clientop";
+      break;
+    case mClockClientQueue::osd_op_type_t::osd_subop:
+      out << "subop";
+      break;
+    case mClockClientQueue::osd_op_type_t::bg_snaptrim:
+      out << "snaptrim";
+      break;
+    case mClockClientQueue::osd_op_type_t::bg_recovery:
+      out << "recovery";
+      break;
+    case mClockClientQueue::osd_op_type_t::bg_scrub:
+      out << "scrub";
+      break;
+    default:
+      out << "invalid";
+    }
+    return out << client.first;
+  }
 } // namespace ceph

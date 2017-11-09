@@ -257,6 +257,10 @@ struct dmc_op_tracker {
   bool valid() {
     return (delta != 0 && rho != 0) || phase != 0xFF;
   }
+
+  void add_cost(int64_t _c) {
+    cost +=_c;
+  }
 };
 
 WRITE_CLASS_ENCODER(dmc_op_tracker)

@@ -2515,64 +2515,32 @@ std::vector<Option> get_global_options() {
     .set_default(8<<20)
     .set_description(""),
 
-    Option("osd_dmc_opqueue_client_r", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(1000.0)
+    Option("osd_dmc_queue_spec_clientop", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
     .set_description(""),
-  
-    Option("osd_dmc_opqueue_client_w", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(500.0)
+
+    Option("osd_dmc_queue_spec_subop", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
     .set_description(""),
-  
-    Option("osd_dmc_opqueue_client_l", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(0.0)
+
+    Option("osd_dmc_queue_spec_pullpush", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,20M")
     .set_description(""),
-  
-    Option("osd_dmc_opqueue_subop_r", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(1000.0)
+
+    Option("osd_dmc_queue_spec_snaptrim", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
     .set_description(""),
-  
-    Option("osd_dmc_opqueue_subop_w", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(500.0)
+
+    Option("osd_dmc_queue_spec_recovery", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
     .set_description(""),
-  
-    Option("osd_dmc_opqueue_subop_l", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(0.0)
+
+    Option("osd_dmc_queue_spec_scrub", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
     .set_description(""),
-  
-    Option("osd_dmc_opqueue_pg_snaptrim_r", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(1000.0)
-    .set_description(""),
-  
-    Option("osd_dmc_opqueue_pg_snaptrim_w", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(500.0)
-    .set_description(""),
-  
-    Option("osd_dmc_opqueue_pg_snaptrim_l", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(0.0)
-    .set_description(""),
-  
-    Option("osd_dmc_opqueue_pg_recovery_r", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(1000.0)
-    .set_description(""),
-  
-    Option("osd_dmc_opqueue_pg_recovery_w", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(500.0)
-    .set_description(""),
-  
-    Option("osd_dmc_opqueue_pg_recovery_l", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(0.0)
-    .set_description(""),
-  
-    Option("osd_dmc_opqueue_pg_scrub_r", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(1000.0)
-    .set_description(""),
-  
-    Option("osd_dmc_opqueue_pg_scrub_w", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(500.0)
-    .set_description(""),
-  
-    Option("osd_dmc_opqueue_pg_scrub_l", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(0.0)
+
+    Option("osd_dmc_queue_enable_pullpush", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(true)
     .set_description(""),
 
     Option("osd_max_push_objects", Option::TYPE_UINT, Option::LEVEL_ADVANCED)

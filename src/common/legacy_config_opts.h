@@ -705,23 +705,15 @@ OPTION(osd_op_queue_mclock_scrub_res, OPT_DOUBLE)
 OPTION(osd_op_queue_mclock_scrub_wgt, OPT_DOUBLE)
 OPTION(osd_op_queue_mclock_scrub_lim, OPT_DOUBLE)
 
-// Global QoS specification<Reservation, Weight, Limit>
+// Global QoS specification<Reservation, Weight, Limit, Bandwidth>
 // for different kinds of ops
-OPTION(osd_dmc_opqueue_client_r, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_client_w, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_client_l, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_subop_r, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_subop_w, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_subop_l, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_pg_snaptrim_r, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_pg_snaptrim_w, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_pg_snaptrim_l, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_pg_recovery_r, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_pg_recovery_w, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_pg_recovery_l, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_pg_scrub_r, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_pg_scrub_w, OPT_DOUBLE)
-OPTION(osd_dmc_opqueue_pg_scrub_l, OPT_DOUBLE)
+OPTION(osd_dmc_queue_spec_clientop, OPT_STR)
+OPTION(osd_dmc_queue_spec_subop, OPT_STR)
+OPTION(osd_dmc_queue_spec_pullpush, OPT_STR)
+OPTION(osd_dmc_queue_spec_snaptrim, OPT_STR)
+OPTION(osd_dmc_queue_spec_recovery, OPT_STR)
+OPTION(osd_dmc_queue_spec_scrub, OPT_STR)
+OPTION(osd_dmc_queue_enable_pullpush, OPT_BOOL)
 
 OPTION(osd_ignore_stale_divergent_priors, OPT_BOOL) // do not assert on divergent_prior entries which aren't in the log and whose on-disk objects are newer
 

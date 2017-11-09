@@ -108,11 +108,13 @@ namespace crimson {
       }
 
       bool valid() const {
-        bool invalid = reservation < 0 || weight < 0 || limit < 0 || bandwidth < 0;
+        bool invalid = (reservation < 0 || weight < 0 || limit < 0 || bandwidth < 0) ||
+                       (limit > 0 && limit < reservation) ||
+                       (reservation == 0 && weight == 0);
         return !invalid;
       }
 
-      bool equal(const ClientInfo &other) const {
+      bool unchanged(const ClientInfo &other) const {
         return reservation  == other.reservation
                && weight    == other.weight
                && limit     == other.limit
@@ -120,18 +122,17 @@ namespace crimson {
                && version   == other.version;
       }
 
-      ClientInfo& operator=(ClientInfo other) {
+      void assign_spec(const ClientInfo &other) {
         reservation     = other.reservation;
         weight          = other.weight;
         limit           = other.limit;
-        bandwidth	= other.bandwidth;
-        version         = other.version;
-        reservation_inv = other.reservation_inv;
-        weight_inv      = other.weight_inv;
-        limit_inv       = other.limit_inv;
-        bandwidth_inv	= other.bandwidth_inv;
-        return *this;
+        bandwidth       = other.bandwidth;
+        reservation_inv = (0.0 == reservation ? 0.0 : 1.0 / reservation);
+        weight_inv      = (0.0 == weight      ? 0.0 : 1.0 / weight);
+        limit_inv       = (0.0 == limit       ? 0.0 : 1.0 / limit);
+        bandwidth_inv   = (0.0 == bandwidth   ? 0.0 : 1.0 / bandwidth);
       }
+
       friend std::ostream& operator<<(std::ostream& out,
 				      const ClientInfo& client) {
 	out << "{ ClientInfo:: version:" << client.version <<
@@ -670,27 +671,27 @@ namespace crimson {
       Time now = get_time();
       utime_t stamp;
       stamp.set_from_double(now);
-      f->dump_stream("time stamp ") << std::setprecision(16) << now
+      f->dump_stream("time stamp") << std::setprecision(16) << now
                                    << " [" << stamp << "], tick " << tick;
       NextReq next = lookup_next_request(now);
       switch(next.type) {
         case NextReqType::none:
-          f->dump_format("next-to-deq", "%s", "empty queue");
+          f->dump_format("next todeq", "%s", "empty queue");
           break;
         case NextReqType::returning:
-          f->dump_format("next-to-deq", "%s", "-");
+          f->dump_format("next todeq", "%s", "-");
           break;
         case NextReqType::future:
-          f->dump_format("next-to-deq", "%.16f", next.when_ready - now);
+          f->dump_format("next todeq", "%.16f", next.when_ready - now);
           break;
         default:
           assert(false);
       }
 
-      f->open_object_section("clients");
+      f->open_object_section("op clients");
       for (auto it = client_map.begin(); it != client_map.end(); it++) {
         std::stringstream oss, deqtime;
-        oss << ++clinum;
+        oss << ++clinum << "." << it->first;
         if (it->second->has_request()) {
           auto tag = it->second->next_request().tag;
           max_tag == tag.reservation ? deqtime << "-," :
@@ -708,14 +709,14 @@ namespace crimson {
         } else {
           deqtime << "N/A";
         }
-        f->dump_stream(oss.str().c_str()) << "# "
-            << it->second->request_count() << ", Next["
-            << deqtime.str().c_str() << "], Q["
+        f->dump_stream(oss.str().c_str()) << "<"
+            << it->second->request_count() << "> Next["
+            << deqtime.str().c_str() << "] Q["
             << it->second->info.reservation << ","
             << it->second->info.weight << ","
             << it->second->info.limit << ","
             << it->second->info.bandwidth << "].v"
-            << it->second->info.version << ", "
+            << it->second->info.version << " "
             << (it->second->idle ? "idle.t" : "active.t")
             << it->second->last_tick;
       }
@@ -897,7 +898,7 @@ namespace crimson {
 	auto client_it = client_map.find(client_id);
 	if (client_map.end() != client_it) {
 	  temp_client = &(*client_it->second); // address of obj of shared_ptr
-          if (!temp_client->info.equal(client_info)) {
+          if (!temp_client->info.unchanged(client_info)) {
             temp_client->info = client_info; // for update qos from client
 
             // avoid reqs io drop to zero caused by qos update online
