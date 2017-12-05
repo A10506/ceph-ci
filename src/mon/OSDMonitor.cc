@@ -2147,7 +2147,8 @@ bool OSDMonitor::check_failure(utime_t now, int target_osd, failure_info_t& fi)
 
   set<string> reporters_by_subtree;
   string reporter_subtree_level = g_conf->mon_osd_reporter_subtree_level;
-  utime_t orig_grace(g_conf->osd_heartbeat_grace, 0);
+  utime_t orig_grace;
+  orig_grace.set_from_double(g_conf->osd_heartbeat_grace);
   utime_t max_failed_since = fi.get_failed_since();
   utime_t failed_for = now - max_failed_since;
 
