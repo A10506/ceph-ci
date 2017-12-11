@@ -202,7 +202,7 @@ namespace ceph {
 
   public:
 
-    dmcQueue(CephContext *cct) : queue(&client_info_func) {
+    dmcQueue(CephContext *cct) : queue(&client_info_func, false) {
       load_global_dmc_qos_config(cct);
     }
 

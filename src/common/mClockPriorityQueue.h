@@ -217,8 +217,9 @@ namespace ceph {
   public:
 
     mClockQueue(
-      const typename dmc::PullPriorityQueue<K,T>::ClientInfoFunc& info_func) :
-      queue(info_func, false)
+      const typename dmc::PullPriorityQueue<K,T>::ClientInfoFunc& info_func,
+      bool allow_limit_break = true) :
+      queue(info_func, allow_limit_break)
     {
       // empty
     }
