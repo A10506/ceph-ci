@@ -85,6 +85,7 @@ using namespace std;
 #include "messages/MOSDRepScrub.h"
 #include "messages/MOSDRepScrubMap.h"
 #include "messages/MOSDForceRecovery.h"
+#include "messages/MOSDResetRecoveryLimits.h"
 #include "messages/MOSDPGScan.h"
 #include "messages/MOSDPGBackfill.h"
 #include "messages/MOSDBackoff.h"
@@ -405,6 +406,9 @@ Message *decode_message(CephContext *cct, int crcflags,
     break;
   case MSG_OSD_FORCE_RECOVERY:
     m = new MOSDForceRecovery;
+    break;
+  case MSG_OSD_RESET_RECOVERY_LIMITS:
+    m = new MOSDResetRecoveryLimits;
     break;
 
   case MSG_ROUTE:

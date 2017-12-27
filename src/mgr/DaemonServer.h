@@ -86,6 +86,9 @@ protected:
   std::map<int, cache_stat_t> cache_map; // record cache info by osd-id
   std::map<string, imageperf_t> imgsmap;
   SafeTimer timer;
+  map<pg_t, int64_t> num_objects_recovered_by_pg;
+  set<int> last_adjusted_osds;
+  set<int> last_adjusted_primaries;
 
   static void _generate_command_map(map<string,cmd_vartype>& cmdmap,
                                     map<string,string> &param_str_map);
@@ -155,6 +158,14 @@ public:
                           const std::set <std::string> &changed) override;
   void dump_imgsperf(Formatter *f, set<string> &who);
   void dump_imgsperf(ostream& ss, set<string> &who);
+  void send_reset_recovery_limits(
+    int who,
+    uint8_t options,
+    double bandwidth_factor = 1.0,
+    double maxactive_factor = 1.0,
+    double aggressive_factor = 1.0);
+  void clear_recovery_limits();
+  void maybe_reset_recovery_limits();
 };
 
 class MgrDaemonHook : public AdminSocketHook {

@@ -2487,6 +2487,10 @@ std::vector<Option> get_global_options() {
     .set_default(0)
     .set_description(""),
 
+    Option("osd_recovery_max_active_baseline", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(3)
+    .set_description(""),
+
     Option("osd_recovery_max_active", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(3)
     .set_description(""),
@@ -2541,6 +2545,35 @@ std::vector<Option> get_global_options() {
 
     Option("osd_dmc_queue_enable_pullpush", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
+    .set_description(""),
+
+    Option("osd_load_balancer_enabled", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(true)
+    .set_description(""),
+
+    Option("osd_load_balancer_op_priority_mode", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("default")
+    .set_enum_allowed({"default", "client_op_prioritized", "recovery_op_prioritized"})
+    .set_description(""),
+
+    Option("osd_load_balancer_client_op_white_noise_filter", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(2)
+    .set_description(""),
+
+    Option("osd_load_balancer_recovery_op_white_noise_filter", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(0)
+    .set_description(""),
+
+    Option("osd_load_balancer_idle_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(5)
+    .set_description(""),
+
+    Option("osd_load_balancer_spec_default", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,20M")
+    .set_description(""),
+
+    Option("osd_load_balancer_spec_unlimited", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
     .set_description(""),
 
     Option("osd_max_push_objects", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
@@ -4440,6 +4473,33 @@ std::vector<Option> get_global_options() {
     .set_min(1)
     .set_description(""),
 
+    Option("mgr_recovery_balancer_min_objects", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(500)
+    .set_description("for single osd, enable adjustment unless there are at least these many objects to recover"),
+
+    Option("mgr_recovery_balancer_min_adjustment_factor", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(.5)
+    .set_description(""),
+
+    Option("mgr_recovery_balancer_max_adjustment_factor", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(2.0)
+    .set_description(""),
+
+    Option("mgr_recovery_balancer_do_aggressive_adjustment", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(true)
+    .set_description("switch to a more aggressive (e.g., use bigger adjustment factor) adjustment mode when enabled"),
+
+    Option("mgr_recovery_balancer_min_aggressive_osds", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(2)
+    .set_description("minimal OSDs to unconditionally enable aggressive mode"),
+
+    Option("mgr_recovery_balancer_max_aggressive_adjustment_factor", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(5.0)
+    .set_description("a more excessive adjustment factor to apply when appropriate"),
+
+    Option("mgr_recovery_balancer_min_diff", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(.01)
+    .set_description("minimal differece to trigger a adjustment"),
  });
 }
 

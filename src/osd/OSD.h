@@ -114,7 +114,8 @@ enum {
   l_osd_sop_push_lat,
 
   l_osd_pull,
-  l_osd_push,
+  l_osd_push_tx,
+  l_osd_push_rx,
   l_osd_push_outb,
 
   l_osd_rop,
@@ -899,7 +900,8 @@ private:
   utime_t defer_recovery_until;
   uint64_t recovery_ops_active;
   uint64_t recovery_ops_reserved;
-  bool recovery_paused;
+  bool recovery_paused_by_admin = false;
+  bool recovery_paused_by_load_balancer = false;
 #ifdef DEBUG_RECOVERY_OIDS
   map<spg_t, set<hobject_t> > recovery_oids;
 #endif
@@ -932,18 +934,33 @@ public:
     defer_recovery_until = ceph_clock_now();
     defer_recovery_until += defer_for;
   }
-  void pause_recovery() {
+  void pause_recovery(bool from_admin = true) {
     Mutex::Locker l(recovery_lock);
-    recovery_paused = true;
+    if (from_admin)
+      recovery_paused_by_admin = true;
+    else
+      recovery_paused_by_load_balancer = true;
   }
-  bool recovery_is_paused() {
-    Mutex::Locker l(recovery_lock);
-    return recovery_paused;
+  bool recovery_is_paused(bool lock = true) {
+    if (lock) {
+      Mutex::Locker l(recovery_lock);
+      return recovery_paused_by_admin || recovery_paused_by_load_balancer;
+    }
+    return recovery_paused_by_admin || recovery_paused_by_load_balancer;
   }
-  void unpause_recovery() {
+  void unpause_recovery(bool from_admin = true) {
     Mutex::Locker l(recovery_lock);
-    recovery_paused = false;
-    _maybe_queue_recovery();
+    if (!recovery_paused_by_admin && !recovery_paused_by_load_balancer) {
+      // so this method is idempotent and we don't have to worry about
+      // calling _maybe_queue_recovery below multiple times...
+      return;
+    }
+    if (from_admin)
+      recovery_paused_by_admin = false;
+    else
+      recovery_paused_by_load_balancer = false;
+    if (!recovery_paused_by_admin && !recovery_paused_by_load_balancer)
+      _maybe_queue_recovery();
   }
   void kick_recovery_queue() {
     Mutex::Locker l(recovery_lock);
@@ -1619,6 +1636,186 @@ private:
   void update_opwq_tracker(OpRequestRef& op, ServerId& srv);
   dmc_op_tracker get_dmc_op_tracker(ServerId& srv);
 
+  struct LoadBalancer {
+    struct IdleState {
+      uint64_t white_noise_filter = 0;
+      double sample_interval = 1;
+      uint64_t last_sampled_op = 0;
+      uint64_t last_sampled_rate = 0;
+      bool idle = true;
+      utime_t idle_from;
+      int idle_interval = 0; // minimal interval we transit to idle
+
+      void maybe_update_config(md_config_t * conf) {
+        sample_interval = conf->get_val<double>("osd_tick_interval");
+        if (sample_interval <= 0)
+          sample_interval = 1;
+        idle_interval = conf->get_val<int64_t>(
+          "osd_load_balancer_idle_interval");
+      }
+
+      void set_white_noise_filter(uint64_t new_filter) {
+        white_noise_filter = new_filter;
+      }
+
+      void sample(uint64_t op, utime_t now) {
+        if (op < last_sampled_op) {
+          // probably because admin manually cleared perf-counters out,
+          // reset sample-counter too (but leave last_sampled_rate untouched)
+          // so we can bring balancer back to normal on reentry..
+          last_sampled_op = op;
+          return;
+        }
+
+        if (op == last_sampled_op) {
+          last_sampled_rate = 0;
+        } else {
+          last_sampled_rate = (op - last_sampled_op) / sample_interval;
+          last_sampled_rate = std::max(1UL, last_sampled_rate);
+        }
+        last_sampled_op = op;
+        if (last_sampled_rate > white_noise_filter) {
+          idle = false; // if any
+          // reset idle timer too,
+          // so we can reevaluate idle status on reentry
+          idle_from = now;
+        } else {
+          // check if we have stayed idle long enough to set idle status
+          if (now - idle_from >= idle_interval) {
+            idle = true;
+          }
+        }
+      }
+
+      bool is_idle() const {
+        return idle;
+      }
+
+      void dump(Formatter *f) {
+        f->dump_unsigned("white_noise_filter", white_noise_filter);
+        f->dump_float("sample_interval", sample_interval);
+        f->dump_int("idle_interval", idle_interval);
+        f->dump_unsigned("last_sampled_op", last_sampled_op);
+        f->dump_unsigned("last_sampled_rate", last_sampled_rate);
+        f->dump_stream("idle_from") << idle_from;
+        f->dump_stream("idle") << idle;
+      }
+    };
+
+    OSD* osd;
+    IdleState cis;
+    IdleState ris;
+    string spec_applied;
+    string spec_toapply;
+    std::mutex lock; // protect members below on changing
+    bool enabled;
+    string mode;
+    string spec_default;
+    string spec_unlimited; // be careful!
+
+    LoadBalancer(OSD *o) : osd(o) {
+      maybe_update_config();
+    }
+
+    void maybe_update_config() {
+      std::unique_lock<std::mutex> l(lock);
+      auto conf = osd->cct->_conf;
+      enabled = conf->get_val<bool>("osd_load_balancer_enabled");
+      mode = conf->get_val<string>("osd_load_balancer_op_priority_mode");
+      spec_default = conf->get_val<string>("osd_load_balancer_spec_default");
+      spec_unlimited = conf->get_val<string>(
+        "osd_load_balancer_spec_unlimited");
+      cis.maybe_update_config(conf);
+      ris.maybe_update_config(conf);
+      cis.set_white_noise_filter(conf->get_val<int64_t>(
+        "osd_load_balancer_client_op_white_noise_filter"));
+      ris.set_white_noise_filter(conf->get_val<int64_t>(
+        "osd_load_balancer_recovery_op_white_noise_filter"));
+    }
+
+    void maybe_update_spec() {
+      if (mode == "default") {
+        // basic-floor
+        spec_toapply = spec_default;
+        // need further adjustment?
+        if (cis.is_idle() && !ris.is_idle()) {
+          // no client ops and recovery is in-progress,
+          // promote to unlimited (so we can recover at full speed)
+          spec_toapply = spec_unlimited;
+        }
+      } else if (mode == "recovery_op_prioritized") {
+        spec_toapply = spec_unlimited;
+      } else {
+        assert(mode == "client_op_prioritized");
+        if (!cis.is_idle()) {
+          osd->service.pause_recovery(false);
+          return;
+        }
+
+        // idle clients
+        // note that below here there is no way we can reliably tell
+        // whether a recovery is in-progess or not, so simply promote
+        // to unlimited and we'll re-pause if any client activities is
+        // detected on next sample period
+        spec_toapply = spec_unlimited;
+      }
+
+      osd->service.unpause_recovery(false); // if ever
+
+      // try apply new spec
+      if (spec_applied != spec_toapply) {
+        lgeneric_subdout(osd->cct, osd, 0) << "load balancer - "
+                                           << "reset to " << spec_toapply
+                                           << dendl;
+        osd->op_shardedwq.update_queue_config("osd_dmc_queue_spec_pullpush",
+          spec_toapply);
+        spec_applied = spec_toapply;
+      }
+    }
+
+    void sample() {
+      std::unique_lock<std::mutex> l(lock);
+      if (!enabled) {
+        lgeneric_subdout(osd->cct, osd, 5) << "load balancer - disabled"
+                                           << dendl;
+        return;
+      }
+
+      uint64_t cop = osd->logger->get(l_osd_op) +
+                     osd->logger->get(l_osd_sop_w);
+      uint64_t rop = osd->logger->get(l_osd_push_rx);
+
+      // update idle status
+      utime_t now = ceph_clock_now();
+      cis.sample(cop, now);
+      ris.sample(rop, now);
+
+      // and adjust recovery QoS specification if necessary
+      maybe_update_spec();
+    }
+
+    bool can_promote_recovery() {
+      std::unique_lock<std::mutex> l(lock);
+      return mode == "recovery_op_prioritized" ||
+            (mode == "default" && cis.is_idle());
+    }
+
+    void dump(Formatter *f) {
+      std::unique_lock<std::mutex> l(lock);
+      f->dump_bool("enabled", enabled);
+      f->dump_string("mode", mode);
+      f->open_object_section("client_idle_state");
+      cis.dump(f);
+      f->close_section();
+      f->open_object_section("recovery_idle_state");
+      ris.dump(f);
+      f->close_section();
+      f->dump_string("spec_applied", spec_applied);
+      f->dump_string("spec_default", spec_default);
+      f->dump_string("spec_unlimited", spec_unlimited);
+    }
+  } load_balancer;
+
   // -- op queue --
   enum class io_queue {
     prioritized,
@@ -2228,6 +2425,7 @@ protected:
   void handle_pg_recovery_reserve(OpRequestRef op);
 
   void handle_force_recovery(Message *m);
+  void handle_reset_recovery_limits(Message *m);
 
   void handle_pg_remove(OpRequestRef op);
   void _remove_pg(PG *pg);

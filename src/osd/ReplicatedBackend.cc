@@ -2114,7 +2114,7 @@ int ReplicatedBackend::build_push_op(const ObjectRecoveryInfo &recovery_info,
     stat->num_bytes_recovered += out_op->data.length();
   }
 
-  get_parent()->get_logger()->inc(l_osd_push);
+  get_parent()->get_logger()->inc(l_osd_push_tx);
   get_parent()->get_logger()->inc(l_osd_push_outb, out_op->data.length());
 
   // send
