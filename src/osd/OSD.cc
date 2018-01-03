@@ -5314,7 +5314,7 @@ void OSD::tick()
 
   do_waiters();
 
-  tick_timer.add_event_after(OSD_TICK_INTERVAL, new C_Tick(this));
+  tick_timer.add_event_after(cct->_conf->osd_tick_interval, new C_Tick(this));
 }
 
 void OSD::tick_without_osd_lock()
