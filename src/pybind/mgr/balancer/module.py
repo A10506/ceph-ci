@@ -16,8 +16,8 @@ from mgr_module import CRUSHMap
 
 # available modes: 'none', 'crush', 'crush-compat', 'upmap', 'osd_weight'
 default_mode = 'none'
-default_sleep_interval = 60   # seconds
-default_max_misplaced = .05    # max ratio of pgs replaced at a time
+default_sleep_interval =  5   # seconds
+default_max_misplaced = .05   # max ratio of pgs replaced at a time
 
 TIME_FORMAT = '%Y-%m-%d_%H:%M:%S'
 
@@ -388,6 +388,86 @@ class Module(MgrModule):
                            begin_time, end_time, timeofday)
             sleep_interval = float(self.get_config('sleep_interval',
                                                    default_sleep_interval))
+            enable_smart_optimize = bool(int(self.get_config('enable_smart_optimize', 0)))
+            if enable_smart_optimize:
+                auto_optimize_pool_age = int(self.get_config('auto_optimize_pool_age', 300))
+                auto_optimize_pool_mode = self.get_config('auto_optimize_pool_mode', 'upmap')
+                osdmap = self.get_osdmap()
+                pools = []
+                # check newly created pools
+                # shutdown this for now, we won't have pool create-time until mimic...
+                '''
+                for i in osdmap.dump().get('pools',[]):
+                    create_time = i['create_time']
+                    # skip those whose create-times are currently unknown to us
+                    if create_time == '0.000000':
+                        self.log.info('create_time of pool "%s" is unknown, skip' \
+                                      % i['pool_name'])
+                        continue
+                    if time.time() - time.mktime( \
+                       time.strptime(create_time.split('.')[0], '%Y-%m-%d %H:%M:%S')) >= \
+                       auto_optimize_pool_age:
+                        self.log.info('pool "%s" is too old for automatical optimization, skipping' \
+                                      % i['pool_name'])
+                        continue
+                    pools.append(i['pool_name'])
+                '''
+                # check pools which currently have backfilling pgs
+                backfill_pool_ids = set()
+                for pg in self.get("pg_dump").get('pg_stats', []):
+                    if 'backfill' in pg.get('state', ''):
+                        backfill_pool_ids.add(int(pg.get('pgid').split('.')[0]))
+                # check empty pools
+                # note that below here we consider pools of less than 100 objects
+                # or 10GiB as empty since their backfill process might not get
+                # caught by the above check
+                min_objects = int(self.get_config('min_pool_objects_to_optimize', 100))
+                min_bytes = int(self.get_config('min_pool_bytes_to_optimize', 10<<30))
+                empty_pool_ids = set()
+                for pool in self.get("pg_dump").get('pool_stats', []):
+                    if pool['stat_sum']['num_objects'] <= min_objects or \
+                       pool['stat_sum']['num_bytes'] <= min_bytes:
+                        empty_pool_ids.add(pool['poolid'])
+                for pool_id in backfill_pool_ids | empty_pool_ids:
+                    for i in osdmap.dump().get('pools',[]):
+                        if i['pool'] == pool_id and i['pool_name'] not in pools:
+                            pools.append(i['pool_name'])
+                            break
+                if len(pools):
+                    self.log.info('will do automatical optimization for pools:%s' \
+                                  % pools)
+                    name = 'auto_optimize_pools_%s' \
+                           % time.strftime(TIME_FORMAT, time.gmtime())
+                    plan = self.plan_create(name, osdmap, pools)
+                    if plan.mode == 'unknown':
+                        self.log.error('reset plan "%s" mode to %s'
+                                       % (plan.name, auto_optimize_pool_mode))
+                        plan.mode = auto_optimize_pool_mode
+                    r, detail = self.optimize(plan, False)
+                    if r:
+                        self.log.error('optimize plan "%s" error: mode =%s, r = %d, detail = %s'\
+                                       %(plan.name, plan.mode, r, detail))
+                    else:
+                        r, detail = self.execute(plan)
+                        if r:
+                            self.log.error('execute plan "%s" error: mode =%s, r = %d, detail = %s'\
+                                           %(plan.name, plan.mode, r, detail))
+                            if plan.mode == 'upmap' and r == -errno.EPERM:
+                                # try to automatically enable required upmap features
+                                self.log.error('sending "ceph osd set-require-min-compat-client luminous"')
+                                result = CommandResult('')
+                                self.send_command(result, 'mon', '', json.dumps({
+                                    'prefix': 'osd set-require-min-compat-client',
+                                    'format': 'json',
+                                    'version': 'luminous'
+                                }), '')
+                                r, outb, outs = result.wait()
+                                if r:
+                                    self.log.error('"ceph osd set-require-min-compat-client luminous"' \
+                                                   ': r = %d, detail =%s' % (r, outs))
+                        else:
+                            self.log.info('done optimizing pools %s' % pools)
+                    self.plan_rm(name)
             if self.active and self.time_in_interval(timeofday, begin_time, end_time):
                 self.log.debug('Running')
                 name = 'auto_%s' % time.strftime(TIME_FORMAT, time.gmtime())
@@ -620,9 +700,10 @@ class Module(MgrModule):
         pe = self.calc_eval(ms, pools)
         return pe.show(verbose=verbose)
 
-    def optimize(self, plan):
+    def optimize(self, plan, sanity_check=True):
         self.log.info('Optimize plan %s' % plan.name)
-        plan.mode = self.get_config('mode', default_mode)
+        if plan.mode == 'unknown':
+            plan.mode = self.get_config('mode', default_mode)
         max_misplaced = float(self.get_config('max_misplaced',
                                               default_max_misplaced))
         self.log.info('Mode %s, max misplaced %f' %
@@ -643,11 +724,11 @@ class Module(MgrModule):
             detail = 'Some objects (%f) are degraded; try again later' % degraded
             self.log.info(detail)
             return -errno.EAGAIN, detail
-        elif inactive > 0.0:
+        elif sanity_check and inactive > 0.0:
             detail = 'Some PGs (%f) are inactive; try again later' % inactive
             self.log.info(detail)
             return -errno.EAGAIN, detail
-        elif misplaced >= max_misplaced:
+        elif sanity_check and misplaced >= max_misplaced:
             detail = 'Too many objects (%f > %f) are misplaced; ' \
                      'try again later' % (misplaced, max_misplaced)
             self.log.info(detail)
