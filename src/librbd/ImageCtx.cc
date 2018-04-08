@@ -1226,6 +1226,10 @@ struct C_InvalidateCache : public Context {
     return 0;
   }
 
+  void ImageCtx::set_qos_enabled(bool enabled) {
+    qos_enabled = enabled;
+  }
+
   int ImageCtx::set_qos_quota(int res, int wgt, int lim, int bdw) {
     if (res < 0 || wgt < 0 || lim < 0 || bdw < 0) {
       ldout(cct, 0) << __func__ << " invalid qos spec [ "

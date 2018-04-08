@@ -348,7 +348,9 @@ Context *RefreshRequest<I>::handle_v2_get_metadata(int *result) {
   }
 
   m_image_ctx.apply_metadata(m_metadata, false);
-  m_image_ctx.set_qos_quota();
+  if (m_image_ctx.qos_enabled) {
+    m_image_ctx.set_qos_quota();
+  }
 
   send_v2_get_flags();
   return nullptr;
