@@ -21,6 +21,7 @@
 #include <boost/circular_buffer.hpp>
 
 #include "common/RWLock.h"
+#include "include/stringify.h"
 
 #include "msg/msg_types.h"
 
@@ -210,5 +211,46 @@ class DaemonStateIndex
 	    const std::set<std::string>& names_exist);
 };
 
+struct cache_stat_t {
+  uint64_t capacity;    // bytes
+  uint64_t usage;
+  uint64_t read_hits;
+  uint64_t read_ops;    // read op count
+  cache_stat_t(): capacity(0), usage(0), read_hits(0), read_ops(0) {};
+  cache_stat_t(uint64_t capacity, uint64_t usage, uint64_t read_hits, uint64_t read_ops)
+    : capacity(capacity), usage(usage), read_hits(read_hits), read_ops(read_ops) {};
+};
+
+struct pool_cache_t {
+  uint64_t capacity;
+  uint64_t usage;
+  uint64_t read_hits;
+  uint64_t read_ops;
+  float    hit_rate;
+
+  pool_cache_t(): capacity(0), usage(0), read_hits(0), read_ops(0), hit_rate(0) {};
+  pool_cache_t(uint64_t cp, uint64_t usage, uint64_t read_hits, uint64_t read_ops)
+    : capacity(cp), usage(usage), read_hits(read_hits), read_ops(read_ops), hit_rate(0) {};
+
+  void calculate_hit_rate() {
+    if (read_ops > 0) {
+      hit_rate = read_hits * 1.0 / read_ops;
+    }
+  }
+
+  void dump(Formatter *f, int64_t pool_id) {
+    if (f) {
+      std::string pool = stringify(pool_id);
+      f->open_object_section(pool.c_str());
+      f->dump_int("pool_id", pool_id);
+      f->dump_unsigned("capacity", capacity);
+      f->dump_unsigned("usage", usage);
+      f->dump_unsigned("read_hits", read_hits);
+      f->dump_unsigned("read_ops", read_ops);
+      f->dump_float("hit_rate", hit_rate);
+      f->close_section();
+    }
+  }
+};
 #endif
 

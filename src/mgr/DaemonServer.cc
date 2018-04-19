@@ -1332,6 +1332,146 @@ bool DaemonServer::handle_command(MCommand *m)
     ss << std::endl;
     cmdctx->reply(r, ss);
     return true;
+  } else if (prefix == "mgr report cache-stat") {
+    auto split = [](const std::string& content, std::string split, std::list<std::string>& fields) {
+      std::string::size_type pos = 0;
+      while (true) {
+        auto r = content.find_first_of(split, pos);
+        if (r == std::string::npos) {
+          fields.push_back(content.substr(pos));
+          break;
+        } else {
+          fields.push_back(content.substr(pos, r - pos));
+          pos = content.find_first_not_of(split, r);
+          if (pos == std::string::npos) {
+            break;
+          }
+        }
+      }
+    };
+
+    auto split_kv_pair = [](const std::string& kv_str, std::string &key, std::string &value) {
+      auto r = kv_str.find(':');
+      if (r != std::string::npos) {
+        key = kv_str.substr(0, r);
+        value = kv_str.substr(r + 1);
+      }
+    };
+
+    bufferlist data(m->get_data());
+    std::string indata_string(m->get_data().to_str());
+    std::list<std::string> lines;
+    split(indata_string, "\n", lines);
+    for (const auto& line : lines) {
+      // "id:0 cache_size:152619 cache_usage:25945 cache_hits:2961 cache_reads:3231\n"
+      // skip line not starts with "id:"
+      if (line.compare(0, 3, "id:") != 0) {
+        continue;
+      }
+      bool skip = false;
+      std::list<std::string> kvs;
+      std::map<std::string, uint64_t> osd_cache_stat;
+      split(line, " ", kvs);
+      for (const auto& i : kvs) {
+        std::string key, value_str;
+        split_kv_pair(i, key, value_str);
+        if (!key.empty() && !value_str.empty()) {
+          std::string err;
+          uint64_t value = strict_sistrtoll(value_str.c_str(), &err);
+          if (err.empty()) {
+            osd_cache_stat.insert(std::make_pair(key, value));
+          } else {
+            dout(2) << " convert " << value << " to uint64 failed, caused by " << err << dendl;
+            skip = true;
+          }
+        } else {
+          skip = true;
+       }
+      }
+      if (skip) {
+        dout(10) << " skip process line \"" << line << "\"" << dendl;
+        continue;
+      }
+
+      // store in cache_map
+      auto it = osd_cache_stat.find("id");
+      if (it == osd_cache_stat.end()) {
+        continue;
+      }
+      struct cache_stat_t osd_update_cache(osd_cache_stat["cache_size"],
+                                           osd_cache_stat["cache_usage"],
+                                           osd_cache_stat["cache_hits"],
+                                           osd_cache_stat["cache_reads"]);
+      cache_map[it->second] = osd_update_cache;
+      ldout(cct, 10) << " update cache_map from osd." << it->second
+                     << " capacity: " << osd_cache_stat["cache_size"]
+                     << " usage: " << osd_cache_stat["cache_usage"] << "read hits: " << osd_cache_stat["cache_hits"]
+                     << " read ops: " << osd_cache_stat["cache_reads"] << dendl;
+    }
+    cmdctx->reply(0, "");
+    return true;
+  } else if (prefix == "mgr dump cache-stat") {
+    vector<std::string> expect_pool_names;
+    set<int64_t> expect_pool_ids;
+    cmd_getval(g_ceph_context, cmdctx->cmdmap, "pool_name", expect_pool_names);
+    for (const auto &pool_name : expect_pool_names) {
+      int64_t expect_pool_id = -1;
+      cluster_state.with_osdmap([&] (const OSDMap& osdmap) {
+            expect_pool_id = osdmap.lookup_pg_pool_name(pool_name);
+      });
+      if (expect_pool_id < 0) {
+        // pool may not exist, reply with -ENOENT
+        r = -ENOENT;
+        ss << "pool:" << pool_name << " doesn't exist";
+        cmdctx->reply(r, ss);
+        return true;
+      }
+      expect_pool_ids.insert(expect_pool_id);
+    }
+
+    std::map<uint64_t, pool_cache_t> pool_caches;
+    cluster_state.with_osdmap([&] (const OSDMap& osdmap) {
+        for (std::map<int, cache_stat_t>::const_iterator it = cache_map.begin(); 
+             it != cache_map.end(); it++) {
+          auto osd = it->first;
+          if (!osdmap.exists(osd) || osdmap.is_out(osd)) {
+            // clear outdated cache info
+            cache_map.erase(osd);
+            ldout(cct, 10) << " skip osd." << osd << dendl;
+            continue;
+          }
+          
+          set<int64_t> pool_ids;
+          osdmap.get_pool_ids_by_osd(this->cct, it->first, &pool_ids);
+          for (const auto &pool_id : pool_ids) {
+            if (!expect_pool_ids.empty() && 
+                expect_pool_ids.find(pool_id) == expect_pool_ids.end()) {
+              ldout(cct, 10) << " skip pool " << pool_id << dendl;
+              continue;
+            }
+            pool_caches[pool_id].capacity += it->second.capacity;
+            pool_caches[pool_id].usage += it->second.usage;
+            pool_caches[pool_id].read_hits += it->second.read_hits;
+            pool_caches[pool_id].read_ops += it->second.read_ops;
+            ldout(cct, 10) << " dump pool_map from osd." << it->first << " to pool." << pool_id
+                           << " capacity: " << it->second.capacity
+                           << " usage: " << it->second.usage << " read hits: " << it->second.read_hits
+                           << " read ops: " << it->second.read_ops << dendl;
+          }
+        }
+     });
+
+    // it's time to update pool_cache->hit_rate,and dump
+   JSONFormatter f;
+   f.open_array_section("pool_cache");
+   for (auto &cache : pool_caches) {
+     cache.second.calculate_hit_rate();
+     cache.second.dump(&f, cache.first);
+   }
+   f.close_section();
+   f.flush(cmdctx->odata);
+   cmdctx->reply(0, ss);
+   return true;
   } else {
     r = cluster_state.with_pgmap([&](const PGMap& pg_map) {
 	return cluster_state.with_osdmap([&](const OSDMap& osdmap) {

@@ -45,6 +45,8 @@ class MgrCommand : public CommandOp
 
   MgrCommand(ceph_tid_t t) : CommandOp(t) {}
   MgrCommand() : CommandOp() {}
+
+  Context *ontimeout;
 };
 
 class MgrClient : public Dispatcher
@@ -100,6 +102,7 @@ public:
   bool handle_mgr_map(MMgrMap *m);
   bool handle_mgr_configure(MMgrConfigure *m);
   bool handle_command_reply(MCommandReply *m);
+  int _cancel_mgr_command(uint64_t tid, int r);
 
   void send_report();
   void send_pgstats();

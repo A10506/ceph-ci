@@ -136,3 +136,13 @@ COMMAND("config set " \
 	"name=key,type=CephString name=value,type=CephString",
 	"Set a configuration option at runtime (not persistent)",
 	"mgr", "rw", "cli,rest")
+
+COMMAND("mgr report cache-stat "                        \
+        "name=data_buff,type=CephString",               \
+        "report interesting cache info to mgr",         \
+        "mgr", "r", "cli,rest")
+
+COMMAND("mgr dump cache-stat "                          \
+        "name=pool_name,type=CephString,n=N,req=false", \
+        "dump cache info",                              \
+        "mgr", "r", "cli,rest")

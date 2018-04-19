@@ -1297,6 +1297,7 @@ OPTION(fio_dir, OPT_STR) // fio data directory for fio-objectstore
 
 OPTION(rados_mon_op_timeout, OPT_DOUBLE) // how many seconds to wait for a response from the monitor before returning an error from a rados operation. 0 means no limit.
 OPTION(rados_osd_op_timeout, OPT_DOUBLE) // how many seconds to wait for a response from osds before returning an error from a rados operation. 0 means no limit.
+OPTION(rados_mgr_op_timeout, OPT_DOUBLE) // how many seconds to wait for a response from mgrs before returning an error from a rados operation. 0 means no limit.
 OPTION(rados_tracing, OPT_BOOL) // true if LTTng-UST tracepoints should be enabled
 
 OPTION(nss_db_path, OPT_STR) // path to nss db
