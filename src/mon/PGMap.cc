@@ -4706,6 +4706,28 @@ static void _try_mark_pg_stale(
   }
 }
 
+static void _try_add_pg_pending_stale(
+  const OSDMap& osdmap,
+  const pg_t &pgid,
+  const pg_stat_t& cur,
+  map<pg_t, utime_t> &pending_stale)
+{
+  if ((cur.state & PG_STATE_STALE) == 0 &&
+      cur.acting_primary != -1 &&
+      osdmap.is_down(cur.acting_primary)) {
+    auto ps = pending_stale.find(pgid);
+    if (ps != pending_stale.end()) {
+      // already added
+      return;
+    } else {
+      pending_stale[pgid] = ceph_clock_now();
+      dout(10) << __func__ << " add pg (" << pgid
+               << "," << pending_stale[pgid]
+               << ") to pending stale " << dendl;
+    }
+  }
+}
+
 void PGMapUpdater::check_down_pgs(
     const OSDMap &osdmap,
     const PGMap &pg_map,
@@ -4720,6 +4742,7 @@ void PGMapUpdater::check_down_pgs(
     check_all = true;
   }
 
+  map<pg_t, utime_t> pending_stale;
   if (check_all) {
     for (const auto& p : pg_map.pg_stat) {
       _try_mark_pg_stale(osdmap, p.first, p.second, pending_inc);
@@ -4735,6 +4758,41 @@ void PGMapUpdater::check_down_pgs(
 	  const pg_stat_t &stat = pg_map.pg_stat.at(pgid);
 	  assert(stat.acting_primary == osd);
 	  _try_mark_pg_stale(osdmap, pgid, stat, pending_inc);
+	}
+      }
+    }
+  }
+}
+
+void PGMapUpdater::check_down_pgs(
+    const OSDMap &osdmap,
+    const PGMap &pg_map,
+    bool check_all,
+    const set<int>& need_check_down_pg_osds,
+    map<pg_t, utime_t> &pending_stale)
+{
+  // if a large number of osds changed state, just iterate over the whole
+  // pg map.
+  if (need_check_down_pg_osds.size() > (unsigned)osdmap.get_num_osds() *
+      g_conf->get_val<double>("mon_pg_check_down_all_threshold")) {
+    check_all = true;
+  }
+
+  if (check_all) {
+    for (const auto& p : pg_map.pg_stat) {
+      _try_add_pg_pending_stale(osdmap, p.first, p.second, pending_stale);
+    }
+  } else {
+    for (auto osd : need_check_down_pg_osds) {
+      if (osdmap.is_down(osd)) {
+	auto p = pg_map.pg_by_osd.find(osd);
+	if (p == pg_map.pg_by_osd.end()) {
+	  continue;
+	}
+	for (auto pgid : p->second) {
+	  const pg_stat_t &stat = pg_map.pg_stat.at(pgid);
+	  assert(stat.acting_primary == osd);
+	  _try_add_pg_pending_stale(osdmap, pgid, stat, pending_stale);
 	}
       }
     }

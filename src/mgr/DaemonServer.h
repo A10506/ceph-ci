@@ -82,8 +82,10 @@ protected:
   epoch_t pending_service_map_dirty = 0;
 
   Mutex lock;
+  MgrDaemonHook *m_daemon_hook = nullptr;
 
   std::map<int, cache_stat_t> cache_map; // record cache info by osd-id
+
   std::map<string, imageperf_t> imgsmap;
   SafeTimer timer;
   map<pg_t, int64_t> num_objects_recovered_by_pg;
@@ -158,6 +160,7 @@ public:
                           const std::set <std::string> &changed) override;
   void dump_imgsperf(Formatter *f, set<string> &who);
   void dump_imgsperf(ostream& ss, set<string> &who);
+  void dump_cluster_state(Formatter *f);
   void send_reset_recovery_limits(
     int who,
     uint8_t options,

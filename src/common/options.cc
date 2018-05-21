@@ -4460,6 +4460,10 @@ std::vector<Option> get_global_options() {
     .set_default(5)
     .set_description(""),
 
+    Option("mgr_mark_pg_stale_delay", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(5.0)
+    .set_description(""),
+
     Option("mgr_op_latency_in_us", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
     .set_description(""),

@@ -100,6 +100,9 @@ void ClusterState::ingest_pgstats(MPGStats *stats)
     }
 
     pending_inc.pg_stat_updates[pgid] = pg_stats;
+
+    // try to drop any pending stale state since we are hearing again
+    pending_stale.erase(pgid);
   }
 
   for (const auto &p : stats->op_stat) {
@@ -111,6 +114,44 @@ void ClusterState::ingest_pgstats(MPGStats *stats)
   if (now - pg_map.last_sampled >= g_conf->get_val<int64_t>("mgr_op_latency_sample_interval")) {
      pg_map.calc_pool_op_latency();
      pg_map.last_sampled = now;
+  }
+}
+
+void ClusterState::try_mark_pg_stale() {
+  utime_t now = ceph_clock_now();
+  double delay = g_conf->get_val<double>("mgr_mark_pg_stale_delay");
+  for (auto it = pending_stale.begin();
+       it != pending_stale.end(); /* no inc */) {
+    auto cur = pg_map.pg_stat.find(it->first);
+    if (cur == pg_map.pg_stat.end()) {
+      pending_stale.erase(it++);
+      continue;
+    }
+    if (cur->second.state & PG_STATE_STALE) {
+      // already stale
+      pending_stale.erase(it++);
+      continue;
+    }
+
+    if (now - it->second >= delay) {
+      pg_stat_t *newstat;
+      auto pi = pending_inc.pg_stat_updates.find(it->first);
+      if (pi != pending_inc.pg_stat_updates.end()) {
+        if (pi->second.state & PG_STATE_STALE) {
+          it++; // pending to mark
+          continue;
+        } else {
+          newstat = &pi->second;
+        }
+      } else {
+        newstat = &pending_inc.pg_stat_updates[it->first];
+        *newstat = cur->second;
+      }
+      newstat->state |= PG_STATE_STALE;
+      dout(10) << " mark pg (" << *it
+	       << ") to stale at " << now << dendl;
+    }
+    it++;
   }
 }
 
@@ -156,7 +197,7 @@ void ClusterState::notify_osdmap(const OSDMap &osd_map)
   // checking osds that went up/down)
   set<int> need_check_down_pg_osds;
   PGMapUpdater::check_down_pgs(osd_map, pg_map, true,
-			       need_check_down_pg_osds, &pending_inc);
+			       need_check_down_pg_osds, pending_stale);
 
   dout(30) << " pg_map before:\n";
   JSONFormatter jf(true);
@@ -175,3 +216,14 @@ void ClusterState::notify_osdmap(const OSDMap &osd_map)
   // that a cut-down set of functionality remains in PGMonitor
   // while the full-blown PGMap lives only here.
 }
+
+void ClusterState::dump(Formatter *f) {
+  f->open_object_section("pg pending stale");
+  for (auto &ps: pending_stale) {
+    std::stringstream oss;
+    oss << ps.first;
+    f->dump_stream(oss.str().c_str()) << ps.second;
+  }
+  f->close_section();
+}
+

@@ -136,6 +136,26 @@ int DaemonServer::init(uint64_t gid, entity_addr_t client_addr)
   timer.init();
   perf_stat_start();
 
+  m_daemon_hook = new MgrDaemonHook(this);
+  AdminSocket* admin_socket = cct->get_admin_socket();
+  int ret = admin_socket->register_command("dump_image_perf",
+                                           "dump_image_perf",
+                                           m_daemon_hook,
+                                           "show opened rbd images performance");
+  if (ret < 0 && ret != -EEXIST) {
+    derr << "error registering admin socket command dump_image_perf: "
+         << cpp_strerror(ret) << dendl;
+  }
+
+  ret = admin_socket->register_command("dump_cluster_state",
+                                       "dump_cluster_state",
+                                       m_daemon_hook,
+                                       "show cluster state of mgr daemon");
+  if (ret < 0 && ret != -EEXIST) {
+    derr << "error registering admin socket command dump_cluster_state: "
+         << cpp_strerror(ret) << dendl;
+  }
+
   return 0;
 }
 
@@ -341,6 +361,13 @@ void DaemonServer::shutdown()
   {
     Mutex::Locker l(lock);
     timer.shutdown();
+  }
+  if (m_daemon_hook) {
+    AdminSocket* admin_socket = cct->get_admin_socket();
+    admin_socket->unregister_command("dump_image_perf");
+    admin_socket->unregister_command("dump_cluster_state");
+    delete m_daemon_hook;
+    m_daemon_hook = nullptr;
   }
   dout(10) << "done" << dendl;
 }
@@ -1639,6 +1666,7 @@ void DaemonServer::send_report()
   py_modules.get_health_checks(&m->health_checks);
 
   cluster_state.with_pgmap([&](const PGMap& pg_map) {
+      cluster_state.try_mark_pg_stale();
       cluster_state.update_delta_stats();
 
       if (pending_service_map.epoch) {
@@ -1908,6 +1936,12 @@ void DaemonServer::dump_imgsperf(ostream& ss, set<string> &who) {
   }
 
   ss << tab;
+}
+
+void DaemonServer::dump_cluster_state(Formatter *f) {
+  f->open_object_section("cluster state");
+  cluster_state.dump(f);
+  f->close_section();
 }
 
 void DaemonServer::send_reset_recovery_limits(
@@ -2215,6 +2249,8 @@ bool MgrDaemonHook::call(std::string command, cmdmap_t& cmdmap,
     set<string> what;
     what.insert("all");
     m_server->dump_imgsperf(f, what);
+  } else if (command == "dump_cluster_state") {
+    m_server->dump_cluster_state(f);
   }
 
   f->flush(out);

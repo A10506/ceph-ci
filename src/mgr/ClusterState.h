@@ -46,6 +46,7 @@ protected:
   set<int64_t> existing_pools; ///< pools that exist, as of PGMap epoch
   PGMap pg_map;
   PGMap::Incremental pending_inc;
+  map<pg_t, utime_t> pending_stale;
 
   PGMapStatService pgservice;
 
@@ -57,7 +58,9 @@ public:
   void load_digest(MMgrDigest *m);
   void ingest_pgstats(MPGStats *stats);
 
+  void try_mark_pg_stale();
   void update_delta_stats();
+  void dump(Formatter *f);
 
   const bufferlist &get_health() const {return health_json;}
   const bufferlist &get_mon_status() const {return mon_status_json;}
