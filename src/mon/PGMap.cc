@@ -1271,15 +1271,18 @@ void PGMap::apply_incremental(CephContext *cct, const Incremental& inc)
     // calculate a delta, and average over the last 2 deltas.
     pool_stat_t d = pg_sum;
     d.stats.sub(pg_sum_old.stats);
-    pg_sum_deltas.push_back(make_pair(d, delta_t));
-    stamp_delta += delta_t;
-    pg_sum_delta.stats.add(d.stats);
-    auto smooth_intervals =
-      cct ? cct->_conf->get_val<uint64_t>("mon_stat_smooth_intervals") : 1;
-    if (pg_sum_deltas.size() > smooth_intervals) {
-      pg_sum_delta.stats.sub(pg_sum_deltas.front().first.stats);
-      stamp_delta -= pg_sum_deltas.front().second;
-      pg_sum_deltas.pop_front();
+    auto period = cct ? cct->_conf->get_val<int64_t>("mgr_tick_period") : 2;
+    if (!d.stats.sum.is_negative() && (double)delta_t >= period) {
+      pg_sum_deltas.push_back(make_pair(d, delta_t));
+      stamp_delta += delta_t;
+      pg_sum_delta.stats.add(d.stats);
+      auto smooth_intervals =
+        cct ? cct->_conf->get_val<uint64_t>("mon_stat_smooth_intervals") : 1;
+      if (pg_sum_deltas.size() > smooth_intervals) {
+        pg_sum_delta.stats.sub(pg_sum_deltas.front().first.stats);
+        stamp_delta -= pg_sum_deltas.front().second;
+        pg_sum_deltas.pop_front();
+      }
     }
   }
   stamp = inc.stamp;
@@ -1766,6 +1769,12 @@ void PGMap::dump_basic(Formatter *f) const
 void PGMap::dump_delta(Formatter *f) const
 {
   f->open_object_section("pg_stats_delta");
+  f->dump_float("stamp_delta", (double)stamp_delta);
+  f->open_array_section("stamp_deltas");
+  for(auto &sd : pg_sum_deltas) {
+    f->dump_float("time", (double)sd.second);
+  }
+  f->close_section();
   pg_sum_delta.dump(f);
   f->close_section();
 }
@@ -2338,6 +2347,10 @@ void PGMap::update_delta(
    */
   pool_stat_t d = current_pool_sum;
   d.stats.sub(old_pool_sum.stats);
+  // filter non-negative delta value that updated by mgr tick
+  auto period = cct ? cct->_conf->get_val<int64_t>("mgr_tick_period") : 2;
+  if (d.stats.sum.is_negative() || (double)delta_t < period)
+    return;
 
   /* Aggregate current delta, and take out the last seen delta (if any) to
    * average it out.

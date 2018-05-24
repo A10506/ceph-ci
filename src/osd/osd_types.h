@@ -1802,6 +1802,16 @@ struct object_stat_sum_t {
 
   void add(const object_stat_sum_t& o);
   void sub(const object_stat_sum_t& o);
+  bool is_negative() const {
+    return
+      num_rd < 0 ||
+      num_rd_kb < 0 ||
+      num_wr < 0 ||
+      num_wr_kb < 0 ||
+      num_objects_recovered < 0 ||
+      num_bytes_recovered < 0 ||
+      num_keys_recovered < 0;
+  }
 
   void dump(Formatter *f) const;
   void padding_check() {
