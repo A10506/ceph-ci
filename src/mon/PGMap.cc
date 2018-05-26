@@ -409,27 +409,29 @@ void PGMapDigest::recovery_rate_summary(Formatter *f, ostream *out,
   // make non-negative; we can get negative values if osds send
   // uncommitted stats and then "go backward" or if they are just
   // buggy/wrong.
+  double duration = (double)delta_stamp;
   pool_stat_t pos_delta = delta_sum;
   pos_delta.floor(0);
-  if (pos_delta.stats.sum.num_objects_recovered ||
-      pos_delta.stats.sum.num_bytes_recovered ||
-      pos_delta.stats.sum.num_keys_recovered) {
-    int64_t objps = pos_delta.stats.sum.num_objects_recovered / (double)delta_stamp;
-    int64_t bps = pos_delta.stats.sum.num_bytes_recovered / (double)delta_stamp;
-    int64_t kps = pos_delta.stats.sum.num_keys_recovered / (double)delta_stamp;
-    if (f) {
-      f->dump_int("recovering_objects_per_sec", objps);
-      f->dump_int("recovering_bytes_per_sec", bps);
-      f->dump_int("recovering_keys_per_sec", kps);
-      f->dump_int("num_objects_recovered", pos_delta.stats.sum.num_objects_recovered);
-      f->dump_int("num_bytes_recovered", pos_delta.stats.sum.num_bytes_recovered);
-      f->dump_int("num_keys_recovered", pos_delta.stats.sum.num_keys_recovered);
-    } else {
-      *out << byte_u_t(bps) << "/s";
-      if (pos_delta.stats.sum.num_keys_recovered)
-	*out << ", " << si_u_t(kps) << "keys/s";
-      *out << ", " << si_u_t(objps) << "objects/s";
-    }
+  int64_t ops = duration > 0 ?
+                pos_delta.stats.sum.num_objects_recovered / duration : 0;
+  int64_t bps = duration > 0 ?
+                pos_delta.stats.sum.num_bytes_recovered / duration : 0;
+  int64_t kps = duration > 0 ?
+                pos_delta.stats.sum.num_keys_recovered / duration : 0;
+  if (f) {
+    f->dump_int("recovering_objects_per_sec", ops);
+    f->dump_int("recovering_bytes_per_sec", bps);
+    f->dump_int("recovering_keys_per_sec", kps);
+    f->dump_int("num_objects_recovered", pos_delta.stats.sum.num_objects_recovered);
+    f->dump_int("num_bytes_recovered", pos_delta.stats.sum.num_bytes_recovered);
+    f->dump_int("num_keys_recovered", pos_delta.stats.sum.num_keys_recovered);
+  } else {
+    if (bps)
+      *out << byte_u_t(bps) << "B/s";
+    if (kps)
+      *out << ", " << si_u_t(kps) << "keys/s";
+    if (ops)
+      *out << ", " << si_u_t(ops) << "objects/s";
   }
 }
 
@@ -469,34 +471,35 @@ void PGMapDigest::client_io_rate_summary(Formatter *f, ostream *out,
                                    const pool_stat_t& delta_sum,
                                    utime_t delta_stamp) const
 {
+  double duration = (double)delta_stamp;
   pool_stat_t pos_delta = delta_sum;
   pos_delta.floor(0);
-  if (pos_delta.stats.sum.num_rd ||
-      pos_delta.stats.sum.num_wr) {
-    if (pos_delta.stats.sum.num_rd) {
-      int64_t rd = (pos_delta.stats.sum.num_rd_kb << 10) / (double)delta_stamp;
-      if (f) {
-	f->dump_int("read_bytes_sec", rd);
-      } else {
-	*out << byte_u_t(rd) << "/s rd, ";
-      }
+
+  int64_t rd = duration > 0 ?
+               (pos_delta.stats.sum.num_rd_kb << 10) / duration : 0;
+  int64_t wr = duration > 0 ?
+               (pos_delta.stats.sum.num_wr_kb << 10) / duration : 0;
+  int64_t iops_rd = duration > 0 ?
+                    pos_delta.stats.sum.num_rd / duration : 0;
+  int64_t iops_wr = duration > 0 ?
+                    pos_delta.stats.sum.num_wr / duration : 0;
+  if (f) {
+    f->dump_int("read_bytes_sec", rd);
+    f->dump_int("write_bytes_sec", wr);
+    f->dump_int("read_op_per_sec", iops_rd);
+    f->dump_int("write_op_per_sec", iops_wr);
+  } else {
+    if (rd)
+      *out << byte_u_t(rd) << "B/s rd";
+    if (wr) {
+      if (rd)
+        *out << ", ";
+      *out << byte_u_t(wr) << "B/s wr";
     }
-    if (pos_delta.stats.sum.num_wr) {
-      int64_t wr = (pos_delta.stats.sum.num_wr_kb << 10) / (double)delta_stamp;
-      if (f) {
-	f->dump_int("write_bytes_sec", wr);
-      } else {
-	*out << byte_u_t(wr) << "/s wr, ";
-      }
-    }
-    int64_t iops_rd = pos_delta.stats.sum.num_rd / (double)delta_stamp;
-    int64_t iops_wr = pos_delta.stats.sum.num_wr / (double)delta_stamp;
-    if (f) {
-      f->dump_int("read_op_per_sec", iops_rd);
-      f->dump_int("write_op_per_sec", iops_wr);
-    } else {
-      *out << si_u_t(iops_rd) << "op/s rd, " << si_u_t(iops_wr) << "op/s wr";
-    }
+    if (iops_rd)
+      *out << ", " << si_u_t(iops_rd) << "op/s rd";
+    if (iops_wr)
+      *out << ", " << si_u_t(iops_wr) << "op/s wr";
   }
 }
 
