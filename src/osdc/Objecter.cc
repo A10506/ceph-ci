@@ -2169,11 +2169,18 @@ void Objecter::tick()
       LingerOp *op = p->second;
       LingerOp::unique_lock wl(op->watch_lock);
       assert(op->session);
-      ldout(cct, 10) << " pinging osd that serves lingering tid " << p->first
+      ldout(cct, 10) << " tick() maybe ping osd that serves lingering tid " << p->first
 		     << " (osd." << op->session->osd << ")" << dendl;
       found = true;
-      if (op->is_watch && op->registered && !op->last_error)
-	_send_linger_ping(op);
+
+      if (op->is_watch && op->registered && !op->last_error) {
+        auto ping_cutoff = ceph::mono_clock::now();
+        ping_cutoff -= ceph::make_timespan(
+          std::min<double>(cct->_conf->objecter_watch_ping_interval, cct->_conf->osd_client_watch_timeout / 2));
+        if (ping_cutoff > op->watch_valid_thru) {
+	  _send_linger_ping(op);
+        }
+      }
     }
     for (map<uint64_t,CommandOp*>::iterator p = s->command_ops.begin();
 	p != s->command_ops.end();

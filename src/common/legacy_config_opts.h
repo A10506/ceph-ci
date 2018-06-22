@@ -409,6 +409,7 @@ OPTION(crush_location_hook_timeout, OPT_INT)
 
 OPTION(objecter_tick_interval, OPT_DOUBLE)
 OPTION(objecter_timeout, OPT_DOUBLE)    // before we ask for a map
+OPTION(objecter_watch_ping_interval, OPT_DOUBLE)
 OPTION(objecter_inflight_op_bytes, OPT_U64) // max in-flight data (both directions)
 OPTION(objecter_inflight_ops, OPT_U64)               // max in-flight ios
 OPTION(objecter_completion_locks_per_session, OPT_U64) // num of completion locks per each session, for serializing same object responses

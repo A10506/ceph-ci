@@ -1581,6 +1581,10 @@ std::vector<Option> get_global_options() {
     .set_default(10.0)
     .set_description(""),
 
+    Option("objecter_watch_ping_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(5.0)
+    .set_description(""),
+
     Option("objecter_inflight_op_bytes", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(100_M)
     .set_description(""),
