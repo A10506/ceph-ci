@@ -1770,9 +1770,18 @@ void PGMap::dump_delta(Formatter *f) const
 {
   f->open_object_section("pg_stats_delta");
   f->dump_float("stamp_delta", (double)stamp_delta);
-  f->open_array_section("stamp_deltas");
+  f->open_object_section("stamp_deltas");
   for(auto &sd : pg_sum_deltas) {
-    f->dump_float("time", (double)sd.second);
+    std::stringstream oss;
+    oss << (double)sd.second;
+    f->dump_format(oss.str().c_str(), "%9ld,%9ld | %9ld,%9ld | %9ld,%9ld,%9ld",
+      sd.first.stats.sum.num_rd,
+      sd.first.stats.sum.num_rd_kb,
+      sd.first.stats.sum.num_wr,
+      sd.first.stats.sum.num_wr_kb,
+      sd.first.stats.sum.num_objects_recovered,
+      sd.first.stats.sum.num_bytes_recovered,
+      sd.first.stats.sum.num_keys_recovered);
   }
   f->close_section();
   pg_sum_delta.dump(f);
