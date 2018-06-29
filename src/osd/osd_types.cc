@@ -2546,47 +2546,52 @@ void op_stat_t::dump(Formatter *f) const
   f->dump_unsigned("op_num", op_num);
   f->dump_unsigned("op_bytes", op_bytes);
   f->dump_unsigned("op_latency", op_latency);
-
   f->dump_unsigned("rd_num", rd_num);
   f->dump_unsigned("rd_bytes", rd_bytes);
   f->dump_unsigned("rd_latency", rd_latency);
-
   f->dump_unsigned("wr_num", wr_num);
   f->dump_unsigned("wr_bytes", wr_bytes);
   f->dump_unsigned("wr_latency", wr_latency);
+  f->dump_unsigned("recovered_objects", recovered_objects);
+  f->dump_unsigned("recovered_bytes", recovered_bytes);
+  f->dump_unsigned("recovered_keys", recovered_keys);
 }
 
 void op_stat_t::encode(bufferlist &bl) const
 {
-  ENCODE_START(1, 1, bl);
+  ENCODE_START(2, 1, bl);
   ::encode(op_num, bl);
   ::encode(op_bytes, bl);
   ::encode(op_latency, bl);
-
   ::encode(rd_num, bl);
   ::encode(rd_bytes, bl);
   ::encode(rd_latency, bl);
-
   ::encode(wr_num, bl);
   ::encode(wr_bytes, bl);
   ::encode(wr_latency, bl);
+  ::encode(recovered_objects, bl);
+  ::encode(recovered_bytes, bl);
+  ::encode(recovered_keys, bl);
   ENCODE_FINISH(bl);
 }
 
 void op_stat_t::decode(bufferlist::iterator &bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(1, 1, 1, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(2, 1, 1, bl);
   ::decode(op_num, bl);
   ::decode(op_bytes, bl);
   ::decode(op_latency, bl);
-
   ::decode(rd_num, bl);
   ::decode(rd_bytes, bl);
   ::decode(rd_latency, bl);
-
   ::decode(wr_num, bl);
   ::decode(wr_bytes, bl);
   ::decode(wr_latency, bl);
+  if (struct_v >= 2) {
+    ::decode(recovered_objects, bl);
+    ::decode(recovered_bytes, bl);
+    ::decode(recovered_keys, bl);
+  }
   DECODE_FINISH(bl);
 }
 

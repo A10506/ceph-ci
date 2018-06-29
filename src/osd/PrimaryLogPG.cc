@@ -565,6 +565,10 @@ PerfCounters *PrimaryLogPG::get_logger()
   return osd->logger;
 }
 
+op_stat_t *PrimaryLogPG::get_op_stat()
+{
+  return &inc_op_stats;
+}
 
 // ====================
 // missing objects
@@ -3467,32 +3471,39 @@ void PrimaryLogPG::log_op_stats(OpContext *ctx)
     osd->logger->hinc(l_osd_op_rw_lat_inb_hist, latency.to_nsec(), inb);
     osd->logger->hinc(l_osd_op_rw_lat_outb_hist, latency.to_nsec(), outb);
     osd->logger->tinc(l_osd_op_rw_process_lat, process_latency);
-    rd_num++;
-    rd_latency += latency.to_nsec();
-    wr_num++;
-    wr_latency += latency.to_nsec();
-    op_num++;
-    op_latency += latency.to_nsec();
+    inc_op_stats.rd_num++;
+    inc_op_stats.rd_bytes += outb;
+    inc_op_stats.rd_latency += latency.to_nsec();
+    inc_op_stats.wr_num++;
+    inc_op_stats.wr_bytes += inb;
+    inc_op_stats.wr_latency += latency.to_nsec();
+    inc_op_stats.op_num++;
+    inc_op_stats.op_bytes += (inb + outb);
+    inc_op_stats.op_latency += latency.to_nsec();
   } else if (op->may_read()) {
     osd->logger->inc(l_osd_op_r);
     osd->logger->inc(l_osd_op_r_outb, outb);
     osd->logger->tinc(l_osd_op_r_lat, latency);
     osd->logger->hinc(l_osd_op_r_lat_outb_hist, latency.to_nsec(), outb);
     osd->logger->tinc(l_osd_op_r_process_lat, process_latency);
-    rd_num++;
-    rd_latency += latency.to_nsec();
-    op_num++;
-    op_latency += latency.to_nsec();
+    inc_op_stats.rd_num++;
+    inc_op_stats.rd_bytes += outb;
+    inc_op_stats.rd_latency += latency.to_nsec();
+    inc_op_stats.op_num++;
+    inc_op_stats.op_bytes += outb;
+    inc_op_stats.op_latency += latency.to_nsec();
   } else if (op->may_write() || op->may_cache()) {
     osd->logger->inc(l_osd_op_w);
     osd->logger->inc(l_osd_op_w_inb, inb);
     osd->logger->tinc(l_osd_op_w_lat, latency);
     osd->logger->hinc(l_osd_op_w_lat_inb_hist, latency.to_nsec(), inb);
     osd->logger->tinc(l_osd_op_w_process_lat, process_latency);
-    wr_num++;
-    wr_latency += latency.to_nsec();
-    op_num++;
-    op_latency += latency.to_nsec();
+    inc_op_stats.wr_num++;
+    inc_op_stats.wr_bytes += inb;
+    inc_op_stats.wr_latency += latency.to_nsec();
+    inc_op_stats.op_num++;
+    inc_op_stats.op_bytes += inb;
+    inc_op_stats.op_latency += latency.to_nsec();
   } else
     ceph_abort();
 

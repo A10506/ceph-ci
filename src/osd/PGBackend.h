@@ -279,6 +279,7 @@ typedef ceph::shared_ptr<const OSDMap> OSDMapRef;
      virtual entity_name_t get_cluster_msgr_name() = 0;
 
      virtual PerfCounters *get_logger() = 0;
+     virtual op_stat_t *get_op_stat() = 0;
 
      virtual ceph_tid_t get_tid() = 0;
 

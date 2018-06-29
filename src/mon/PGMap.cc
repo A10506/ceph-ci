@@ -880,69 +880,6 @@ int64_t PGMapDigest::get_pool_free_space(const OSDMap &osd_map,
   return avail / ::pool_raw_used_rate(osd_map, poolid);
 }
 
-void PGMap::calc_pool_op_latency()
-{
-  for (auto &p : pool_op_stat) {
-    auto &op_stat = p.second;
-    uint64_t op_average_latency = 0;
-    uint64_t rd_average_latency = 0;
-    uint64_t wr_average_latency = 0;
-
-    if (op_stat.op_num)
-      op_average_latency = op_stat.op_latency / op_stat.op_num;
-
-    if (op_stat.rd_num)
-      rd_average_latency = op_stat.rd_latency / op_stat.rd_num;
-
-    if (op_stat.wr_num)
-      wr_average_latency = op_stat.wr_latency / op_stat.wr_num;
-
-    if (g_conf->get_val<bool>("mgr_op_latency_in_us")) {
-      op_average_latency = op_average_latency / 1.0e3 + 0.5;
-      rd_average_latency = rd_average_latency / 1.0e3 + 0.5;
-      wr_average_latency = wr_average_latency / 1.0e3 + 0.5;
-    } else { // to milliseconds
-      op_average_latency = op_average_latency / 1.0e6 + 0.5;
-      rd_average_latency = rd_average_latency / 1.0e6 + 0.5;
-      wr_average_latency = wr_average_latency / 1.0e6 + 0.5;
-    }
-
-    op_stat.op_average_latency = op_average_latency;
-    op_stat.rd_average_latency = rd_average_latency;
-    op_stat.wr_average_latency = wr_average_latency;
-
-    op_stat.op_num = 0;
-    op_stat.op_latency = 0;
-    op_stat.rd_num = 0;
-    op_stat.rd_latency = 0;
-    op_stat.wr_num = 0;
-    op_stat.wr_latency = 0;
-  }
-}
-
-uint64_t PGMap::get_pool_op_latency(int pool, int type) const
-{
-  uint64_t average_latency = 0;
-  auto it = pool_op_stat.find(pool);
-  if (it != pool_op_stat.end()) {
-    auto &op_stat = it->second;
-    switch (type) {
-    case op_latency_type_misc:
-      average_latency = op_stat.op_average_latency;
-      break;
-    case op_latency_type_rd:
-      average_latency = op_stat.rd_average_latency;
-      break;
-    case op_latency_type_wr:
-      average_latency = op_stat.wr_average_latency;
-      break;
-    default:
-      break;
-    }
-  }
-  return average_latency;
-}
-
 int64_t PGMap::get_rule_avail(const OSDMap& osdmap, int ruleno) const
 {
   map<int,float> wm;
@@ -1817,12 +1754,37 @@ void PGMap::dump_pool_stats(Formatter *f) const
     if (q != num_pg_by_pool.end())
       f->dump_unsigned("num_pg", q->second);
     p->second.dump(f);
-    f->dump_unsigned("op_latency",
-          get_pool_op_latency(p->first, op_latency_type_misc));
-    f->dump_unsigned("rd_latency",
-          get_pool_op_latency(p->first, op_latency_type_rd));
-    f->dump_unsigned("wr_latency",
-          get_pool_op_latency(p->first, op_latency_type_wr));
+    f->close_section();
+  }
+  f->close_section();
+}
+
+void PGMap::dump_perf_stats(Formatter *f) const
+{
+  f->open_object_section("cluster");
+  perf_rate_t cluster = perf_sum.get_overall_rate();
+  cluster.dump(f);
+  perf_sum.dump_deltas(f);
+  f->close_section();
+
+  f->open_object_section("pools");
+  for (auto &pp : perf_pools) {
+    perf_rate_t pool = pp.second.get_overall_rate();
+    f->open_object_section(std::to_string(pp.first).c_str());
+    f->dump_int("pool id", pp.first);
+    pool.dump(f);
+    pp.second.dump_deltas(f);
+    f->close_section();
+  }
+  f->close_section();
+
+  f->open_object_section("images");
+  for (auto &pi : perf_images) {
+    perf_rate_t image = pi.second.get_overall_rate();
+    f->open_object_section(pi.first.c_str());
+    f->dump_string("image_name", pi.second.name);
+    image.dump(f);
+    pi.second.dump_deltas(f);
     f->close_section();
   }
   f->close_section();
@@ -1964,14 +1926,8 @@ void PGMap::dump_pool_stats(ostream& ss, bool header) const
     tab.define_column("BYTES", TextTable::LEFT, TextTable::RIGHT);
     tab.define_column("LOG", TextTable::LEFT, TextTable::RIGHT);
     tab.define_column("DISK_LOG", TextTable::LEFT, TextTable::RIGHT);
-    tab.define_column("OP_LATENCY", TextTable::LEFT, TextTable::RIGHT);
-    tab.define_column("RD_LATENCY", TextTable::LEFT, TextTable::RIGHT);
-    tab.define_column("WR_LATENCY", TextTable::LEFT, TextTable::RIGHT);
   } else {
     tab.define_column("", TextTable::LEFT, TextTable::LEFT);
-    tab.define_column("", TextTable::LEFT, TextTable::RIGHT);
-    tab.define_column("", TextTable::LEFT, TextTable::RIGHT);
-    tab.define_column("", TextTable::LEFT, TextTable::RIGHT);
     tab.define_column("", TextTable::LEFT, TextTable::RIGHT);
     tab.define_column("", TextTable::LEFT, TextTable::RIGHT);
     tab.define_column("", TextTable::LEFT, TextTable::RIGHT);
@@ -1994,9 +1950,6 @@ void PGMap::dump_pool_stats(ostream& ss, bool header) const
         << p->second.stats.sum.num_bytes
         << p->second.log_size
         << p->second.ondisk_log_size
-        << get_pool_op_latency(p->first, op_latency_type_misc)
-        << get_pool_op_latency(p->first, op_latency_type_rd)
-        << get_pool_op_latency(p->first, op_latency_type_wr)
         << TextTable::endrow;
   }
 
@@ -2091,6 +2044,72 @@ void PGMap::dump_osd_sum_stats(ostream& ss) const
       << byte_u_t(osd_sum.kb_avail << 10)
       << byte_u_t(osd_sum.kb << 10)
       << TextTable::endrow;
+
+  ss << tab;
+}
+
+void PGMap::dump_perf_stats(ostream& ss) const
+{
+  TextTable tab;
+
+  tab.define_column("TYPE_ID", TextTable::LEFT, TextTable::LEFT);
+  tab.define_column("READ_OP", TextTable::LEFT, TextTable::RIGHT);
+  tab.define_column("READ_BYTE", TextTable::LEFT, TextTable::RIGHT);
+  tab.define_column("READ_LAT", TextTable::LEFT, TextTable::RIGHT);
+  tab.define_column("WRITE_OP", TextTable::LEFT, TextTable::RIGHT);
+  tab.define_column("WRITE_BYTE", TextTable::LEFT, TextTable::RIGHT);
+  tab.define_column("WRITE_LAT", TextTable::LEFT, TextTable::RIGHT);
+  tab.define_column("RECOVERED_OBJECT", TextTable::LEFT, TextTable::RIGHT);
+  tab.define_column("RECOVERED_BYTE", TextTable::LEFT, TextTable::RIGHT);
+  tab.define_column("RECOVERED_KEY", TextTable::LEFT, TextTable::RIGHT);
+
+  perf_rate_t cluster = perf_sum.get_overall_rate();
+
+  tab << "cluster"
+      << cluster.op_read_per_sec
+      << cluster.bytes_read_per_sec
+      << cluster.op_read_latency
+      << cluster.op_write_per_sec
+      << cluster.bytes_write_per_sec
+      << cluster.op_write_latency
+      << cluster.recovered_objects_per_sec
+      << cluster.recovered_bytes_per_sec
+      << cluster.recovered_keys_per_sec
+      << TextTable::endrow
+      << ""
+      << TextTable::endrow;
+
+  tab << "pools:" << TextTable::endrow;
+  for (auto &pp : perf_pools) {
+    perf_rate_t pool = pp.second.get_overall_rate();
+    tab << pp.first
+        << pool.op_read_per_sec
+        << pool.bytes_read_per_sec
+        << pool.op_read_latency
+        << pool.op_write_per_sec
+        << pool.bytes_write_per_sec
+        << pool.op_write_latency
+        << pool.recovered_objects_per_sec
+        << pool.recovered_bytes_per_sec
+        << pool.recovered_keys_per_sec
+        << TextTable::endrow;
+  }
+
+  tab << ""
+      << TextTable::endrow
+      << "images:"
+      << TextTable::endrow;
+  for (auto &pi : perf_images) {
+    perf_rate_t image = pi.second.get_overall_rate();
+    tab << pi.first
+        << image.op_read_per_sec
+        << image.bytes_read_per_sec
+        << image.op_read_latency
+        << image.op_write_per_sec
+        << image.bytes_write_per_sec
+        << image.op_write_latency
+        << TextTable::endrow;
+  }
 
   ss << tab;
 }
@@ -4032,6 +4051,11 @@ int process_pg_map_command(
 	  pg_map.dump_delta(f);
 	  f->close_section();
 	}
+	if (what.count("perf")) {
+          f->open_object_section("perf stats");
+	  pg_map.dump_perf_stats(f);
+	  f->close_section();
+	}
       }
       f->flush(*odata);
     } else {
@@ -4055,6 +4079,9 @@ int process_pg_map_command(
 	}
 	if (what.count("osds")) {
 	  pg_map.dump_osd_stats(ds);
+	}
+	if (what.count("perf")) {
+	  pg_map.dump_perf_stats(ds);
 	}
       }
       odata->append(ds);

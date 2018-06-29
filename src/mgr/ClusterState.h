@@ -60,7 +60,11 @@ public:
 
   void try_mark_pg_stale();
   void update_delta_stats();
+  void sample_perf_stats();
+  void update_image_stats(const string &sid, op_stat_t &stat, const string &sname);
   void dump(Formatter *f);
+  void dump_imgsperf(Formatter *f, set<string> &who);
+  void dump_imgsperf(ostream& ss, set<string> &who);
 
   const bufferlist &get_health() const {return health_json;}
   const bufferlist &get_mon_status() const {return mon_status_json;}

@@ -4456,10 +4456,6 @@ std::vector<Option> get_global_options() {
     .set_default(false)
     .set_description("Enable certain asserts to check for refcounting bugs on shutdown; see http://tracker.ceph.com/issues/21738"),
 
-    Option("mgr_op_latency_sample_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
-    .set_default(5)
-    .set_description(""),
-
     Option("mgr_mark_pg_stale_delay", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(5.0)
     .set_description(""),
@@ -4468,13 +4464,13 @@ std::vector<Option> get_global_options() {
     .set_default(true)
     .set_description(""),
 
-    Option("mgr_image_perf_cleanup_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
-    .set_default(300)
+    Option("mgr_image_idle_to_clean_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(600)
     .set_description(""),
 
-    Option("mgr_image_perf_calc_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
-    .set_default(5)
-    .set_min(1)
+    Option("mgr_perf_smooth_time_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(30)
+    .set_min(5)
     .set_description(""),
 
     Option("mgr_recovery_balancer_min_objects", Option::TYPE_INT, Option::LEVEL_ADVANCED)

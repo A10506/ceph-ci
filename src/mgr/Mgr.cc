@@ -624,6 +624,7 @@ void Mgr::tick()
 {
   dout(10) << dendl;
   server.send_report();
+  server.tick();
 }
 
 std::vector<MonCommand> Mgr::get_command_set() const

@@ -494,7 +494,7 @@ struct C_InvalidateCache : public Context {
 
     m_perfstat = cur_stat;
 
-    cur_stat.sub(pre_stat);
+    cur_stat.floor_sub(pre_stat);
     *rpdata = cur_stat;
   }
 

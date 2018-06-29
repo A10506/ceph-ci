@@ -82,7 +82,6 @@ DaemonServer::DaemonServer(MonClient *monc_,
                       g_conf->auth_service_required :
                       g_conf->auth_supported),
       lock("DaemonServer"),
-      timer(g_ceph_context, lock),
       pgmap_ready(false)
 {
   g_conf->add_observer(this);
@@ -133,21 +132,11 @@ int DaemonServer::init(uint64_t gid, entity_addr_t client_addr)
   msgr->add_dispatcher_tail(this);
 
   started_at = ceph_clock_now();
-  timer.init();
-  perf_stat_start();
 
   m_daemon_hook = new MgrDaemonHook(this);
   AdminSocket* admin_socket = cct->get_admin_socket();
-  int ret = admin_socket->register_command("dump_image_perf",
-                                           "dump_image_perf",
-                                           m_daemon_hook,
-                                           "show opened rbd images performance");
-  if (ret < 0 && ret != -EEXIST) {
-    derr << "error registering admin socket command dump_image_perf: "
-         << cpp_strerror(ret) << dendl;
-  }
 
-  ret = admin_socket->register_command("dump_cluster_state",
+  int ret = admin_socket->register_command("dump_cluster_state",
                                        "dump_cluster_state",
                                        m_daemon_hook,
                                        "show cluster state of mgr daemon");
@@ -358,13 +347,8 @@ void DaemonServer::shutdown()
   dout(10) << "begin" << dendl;
   msgr->shutdown();
   msgr->wait();
-  {
-    Mutex::Locker l(lock);
-    timer.shutdown();
-  }
   if (m_daemon_hook) {
     AdminSocket* admin_socket = cct->get_admin_socket();
-    admin_socket->unregister_command("dump_image_perf");
     admin_socket->unregister_command("dump_cluster_state");
     delete m_daemon_hook;
     m_daemon_hook = nullptr;
@@ -1389,13 +1373,7 @@ bool DaemonServer::handle_command(MCommand *m)
       return true;
     }
 
-    auto it = imgsmap.find(id);
-    if (it != imgsmap.end()) {
-      it->second.update_stat(opstat);
-    } else {
-      imgsmap.emplace(id, imageperf_t(name, opstat));
-    }
-
+    cluster_state.update_image_stats(id, opstat, name);
     cmdctx->reply(0, "");
     return true;
   } else if (prefix == "mgr dump imgs_perf") {
@@ -1410,12 +1388,12 @@ bool DaemonServer::handle_command(MCommand *m)
     }
 
     if (f) {
-      dump_imgsperf(f.get(), what);
+      cluster_state.dump_imgsperf(f.get(), what);
       f->flush(cmdctx->odata);
     } else {
       stringstream dumps;
       ss << "dumping: " << what;
-      dump_imgsperf(dumps, what);
+      cluster_state.dump_imgsperf(dumps, what);
       cmdctx->odata.append(dumps);
     }
     cmdctx->reply(0, "");
@@ -1811,131 +1789,9 @@ void DaemonServer::_send_configure(ConnectionRef c)
   c->send_message(configure);
 }
 
-void DaemonServer::perf_stat_start() {
-  Mutex::Locker l(lock);
-  Context *callback = new FunctionContext([this](int r){ calc_perf(); });
-  timer.add_event_after(
-    g_ceph_context->_conf->get_val<int64_t>("mgr_image_perf_calc_interval"),
-    callback);
-}
-
-void DaemonServer::calc_perf() {
-  assert(lock.is_locked());
-
-  utime_t now = ceph_clock_now();
-  int64_t calc_interval = g_ceph_context->_conf->get_val<int64_t>("mgr_image_perf_calc_interval");
-  int64_t clean_interval = g_ceph_context->_conf->get_val<int64_t>("mgr_image_perf_cleanup_interval");
-  bool latency_us = g_ceph_context->_conf->get_val<bool>("mgr_op_latency_in_us");
-
-  for (auto it = imgsmap.begin(); it != imgsmap.end(); /* empty */) {
-    auto it2 = it++;
-    if (now - it2->second.last_update > clean_interval) {
-      imgsmap.erase(it2);
-      continue;
-    }
-
-    it2->second.rd_ops = (it2->second.raw_data.rd_num - it2->second.pre_data.rd_num)/calc_interval;
-    it2->second.rd_bws = (it2->second.raw_data.rd_bytes - it2->second.pre_data.rd_bytes)/calc_interval;
-    it2->second.rd_lat = (double)(it2->second.raw_data.rd_latency - it2->second.pre_data.rd_latency)/
-                         (it2->second.raw_data.rd_num - it2->second.pre_data.rd_num)/
-                         (latency_us ? 1.0e3 : 1.0e6) + 0.5; // to microsecond or millisecond and round
-
-    it2->second.wr_ops = (it2->second.raw_data.wr_num - it2->second.pre_data.wr_num)/calc_interval;
-    it2->second.wr_bws = (it2->second.raw_data.wr_bytes - it2->second.pre_data.wr_bytes)/calc_interval;
-    it2->second.wr_lat = (double)(it2->second.raw_data.wr_latency - it2->second.pre_data.wr_latency)/
-                         (it2->second.raw_data.wr_num - it2->second.pre_data.wr_num)/
-                         (latency_us ? 1.0e3 : 1.0e6) + 0.5;
-
-    it2->second.total_ops = (it2->second.raw_data.op_num - it2->second.pre_data.op_num)/calc_interval;
-    it2->second.total_bws = (it2->second.raw_data.op_bytes - it2->second.pre_data.op_bytes)/calc_interval;
-    it2->second.total_lat = (double)(it2->second.raw_data.op_latency - it2->second.pre_data.op_latency)/
-                            (it2->second.raw_data.op_num - it2->second.pre_data.op_num)/
-                            (latency_us ? 1.0e3 : 1.0e6) + 0.5;
-
-    it2->second.pre_data = it2->second.raw_data;
-  }
-
-  Context *callback = new FunctionContext([this](int r){ calc_perf(); });
-    timer.add_event_after(calc_interval, callback);
+void DaemonServer::tick() {
+  cluster_state.sample_perf_stats();
   maybe_reset_recovery_limits();
-}
-
-void DaemonServer::dump_imgsperf(Formatter *f, set<string> &who) {
-  f->open_object_section("image perf statistics");
-  for (auto it = imgsmap.begin(); it != imgsmap.end(); it++) {
-    if (!who.count("all") && !who.count(it->first)) {
-      continue;
-    }
-    f->open_object_section(it->first.c_str());
-    f->dump_string("name", it->second.imgname);
-    f->dump_unsigned("ops", it->second.total_ops);
-    f->dump_unsigned("ops_rd", it->second.rd_ops);
-    f->dump_unsigned("ops_wr", it->second.wr_ops);
-    f->dump_unsigned("thruput", it->second.total_bws);
-    f->dump_unsigned("thruput_rd", it->second.rd_bws);
-    f->dump_unsigned("thruput_wr", it->second.wr_bws);
-    f->dump_unsigned("latency", it->second.total_lat);
-    f->dump_unsigned("latency_rd", it->second.rd_lat);
-    f->dump_unsigned("latency_wr", it->second.wr_lat);
-    f->open_object_section("raw_data");
-    f->dump_unsigned("op_num", it->second.raw_data.op_num);
-    f->dump_unsigned("rd_num", it->second.raw_data.rd_num);
-    f->dump_unsigned("wr_num", it->second.raw_data.wr_num);
-    f->dump_unsigned("op_bytes", it->second.raw_data.op_bytes);
-    f->dump_unsigned("rd_bytes", it->second.raw_data.rd_bytes);
-    f->dump_unsigned("wr_bytes", it->second.raw_data.wr_bytes);
-    f->dump_unsigned("op_latency", it->second.raw_data.op_latency);
-    f->dump_unsigned("rd_latency", it->second.raw_data.rd_latency);
-    f->dump_unsigned("wr_latency", it->second.raw_data.wr_latency);
-    f->close_section();
-    f->close_section();
-  }
-  f->close_section();
-}
-
-void DaemonServer::dump_imgsperf(ostream& ss, set<string> &who) {
-  TextTable tab;
-  uint32_t seqn = 0;
-
-  tab.define_column("IMAGE_ID", TextTable::LEFT, TextTable::LEFT);
-  tab.define_column("IOPS", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("IOPS_RD", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("IOPS_WR", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("|", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("THROUGHPUT", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("THRU_RD", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("THRU_WR", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("|", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("LATENCY", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("LAT_RD", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("LAT_WR", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("|", TextTable::LEFT, TextTable::RIGHT);
-  tab.define_column("IMAGE_NAME", TextTable::LEFT, TextTable::LEFT);
-
-  for (auto it = imgsmap.begin(); it != imgsmap.end(); it++) {
-    if (!who.count("all") && !who.count(it->first)) {
-      continue;
-    }
-
-    string imgname = std::to_string(++seqn) + " " + it->first;
-    tab << imgname
-        << it->second.total_ops
-        << it->second.rd_ops
-        << it->second.wr_ops
-        << "|"
-        << it->second.total_bws
-        << it->second.rd_bws
-        << it->second.wr_bws
-        << "|"
-        << it->second.total_lat
-        << it->second.rd_lat
-        << it->second.wr_lat
-        << "|"
-        << it->second.imgname
-        << TextTable::endrow;
-  }
-
-  ss << tab;
 }
 
 void DaemonServer::dump_cluster_state(Formatter *f) {
@@ -2245,11 +2101,7 @@ bool MgrDaemonHook::call(std::string command, cmdmap_t& cmdmap,
   Formatter *f = Formatter::create(
                  format, "json-pretty", "json-pretty");
 
-  if (command == "dump_image_perf") {
-    set<string> what;
-    what.insert("all");
-    m_server->dump_imgsperf(f, what);
-  } else if (command == "dump_cluster_state") {
+  if (command == "dump_cluster_state") {
     m_server->dump_cluster_state(f);
   }
 
