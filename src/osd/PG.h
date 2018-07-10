@@ -1203,6 +1203,10 @@ public:
 
   void set_primary_num_bytes(int64_t num_bytes);
 
+  object_stat_collection_t *get_stats() {
+    return &info.stats.stats;
+  }
+
 protected:
 
   /*

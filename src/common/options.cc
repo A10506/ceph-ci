@@ -7399,6 +7399,10 @@ std::vector<Option> get_mds_client_options() {
     Option("client_mds_namespace", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("")
     .set_description("CephFS file system name to mount"),
+
+    Option("fake_statfs_for_testing", Option::TYPE_INT, Option::LEVEL_DEV)
+    .set_default(0)
+    .set_description("Set a value for kb and compute kb_used from total of num_bytes"),
   });
 }
 
