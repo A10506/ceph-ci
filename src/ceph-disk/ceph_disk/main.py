@@ -1035,7 +1035,7 @@ def init_get():
     init = _check_output(
         args=[
             'ceph-detect-init',
-            '--default', 'sysvinit',
+            '--default', 'systemd',
         ],
     )
     init = must_be_one_line(init)
