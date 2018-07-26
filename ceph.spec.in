@@ -855,6 +855,7 @@ cmake .. \
 %else
     -DWITH_BOOST_CONTEXT=OFF \
 %endif
+    -DWITH_RDMA=OFF \
     -DBOOST_J=%{_smp_ncpus}
 
 make %{?_smp_mflags}
