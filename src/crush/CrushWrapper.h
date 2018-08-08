@@ -732,6 +732,10 @@ public:
                             int type,
 			    vector<int> *children,
 			    bool exclude_shadow = true) const;
+  /**
+   * enumerate all subtrees by type
+   */
+  void get_subtree_of_type(int type, vector<int> *subtrees);
 
   /**
     * get failure-domain type of a specific crush rule
