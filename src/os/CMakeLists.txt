@@ -74,7 +74,7 @@ endif()
 add_library(os STATIC ${libos_srcs}
   $<TARGET_OBJECTS:kv_objs>)
 
-target_link_libraries(os heap_profiler)
+target_link_libraries(os heap_profiler common)
 
 if(WITH_BLUEFS)
   add_library(bluefs SHARED 
