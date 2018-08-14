@@ -486,14 +486,8 @@ target_link_libraries(ceph-mon mon os global-static ceph-common
   ${CMAKE_DL_LIBS})
 install(TARGETS ceph-mon DESTINATION bin)
 
+
 # OSD/ObjectStore
-# make rocksdb statically
-
-if(NOT WITH_SYSTEM_ROCKSDB)
-  include(BuildRocksDB)
-  build_rocksdb()
-endif(NOT WITH_SYSTEM_ROCKSDB)
-
 include(TestBigEndian)
 test_big_endian(CEPH_BIG_ENDIAN)
 if(NOT CEPH_BIG_ENDIAN)
