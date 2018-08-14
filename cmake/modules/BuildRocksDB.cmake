@@ -1,3 +1,5 @@
+include(CheckCCompilerFlag)
+
 function(build_rocksdb)
   set(rocksdb_CMAKE_ARGS -DCMAKE_POSITION_INDEPENDENT_CODE=ON)
   list(APPEND rocksdb_CMAKE_ARGS -DWITH_GFLAGS=OFF)
@@ -46,8 +48,8 @@ function(build_rocksdb)
   # we use an external project and copy the sources to bin directory to ensure
   # that object files are built outside of the source tree.
   include(ExternalProject)
-  set(rocksdb_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rocksdb")
-  set(rocksdb_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/rocksdb")
+  set(rocksdb_SOURCE_DIR "${CMAKE_SOURCE_DIR}/src/rocksdb")
+  set(rocksdb_BINARY_DIR "${CMAKE_BINARY_DIR}/src/rocksdb")
   ExternalProject_Add(rocksdb_ext
     SOURCE_DIR "${rocksdb_SOURCE_DIR}"
     CMAKE_ARGS ${rocksdb_CMAKE_ARGS}

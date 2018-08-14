@@ -593,8 +593,11 @@ endif()
 
 # Rocksdb
 option(WITH_SYSTEM_ROCKSDB "require and build with system rocksdb" OFF)
-if (WITH_SYSTEM_ROCKSDB)
+if(WITH_SYSTEM_ROCKSDB)
   find_package(RocksDB 5.8 REQUIRED)
+else()
+  include(BuildRocksDB)
+  build_rocksdb()
 endif()
 
 option(WITH_SEASTAR "Build seastar components")
