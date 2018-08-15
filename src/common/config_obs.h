@@ -20,8 +20,6 @@
 
 #include "common/config_fwd.h"
 
-namespace ceph::internal {
-
 /** @brief Base class for configuration observers.
  * Use this as a base class for your object if it has to respond to configuration changes,
  * for example by updating some values or modifying its behavior.
@@ -44,6 +42,5 @@ public:
   virtual void handle_subsys_change(const ConfigProxy& conf,
 				    const std::set<int>& changed) { }
 };
-}
 
 #endif

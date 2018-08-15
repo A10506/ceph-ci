@@ -8,8 +8,6 @@
 
 class SharedLRUTest;
 
-namespace ceph::internal {
-
 // empty helper class except when the template argument is LockPolicy::MUTEX
 template<LockPolicy lock_policy>
 class LockCond {
@@ -38,5 +36,3 @@ private:
   Cond cond;
   friend class ::SharedLRUTest;
 };
-
-} // namespace ceph::internal

@@ -4,11 +4,7 @@
 
 #include "lock_policy.h"
 
-namespace ceph::internal {
 template<class ConfigProxy> class md_config_obs_impl;
-}
-
 struct md_config_t;
 class ConfigProxy;
-using md_config_obs_t =
-  ceph::internal::md_config_obs_impl<ConfigProxy>;
+using md_config_obs_t = md_config_obs_impl<ConfigProxy>;

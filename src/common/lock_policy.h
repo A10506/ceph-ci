@@ -2,11 +2,7 @@
 
 #pragma once
 
-namespace ceph::internal {
-
 enum class LockPolicy {
   SINGLE,
   MUTEX,
 };
-
-}
