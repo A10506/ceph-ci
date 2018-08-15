@@ -4,35 +4,51 @@
 
 #include "lock_policy.h"
 #include "lock_mutex.h"
+#ifdef NDEBUG
+#include <condition_variable>
+#else
 #include "Cond.h"
+#endif
 
 class SharedLRUTest;
 
-// empty helper class except when the template argument is LockPolicy::MUTEX
+// empty helper class except when the template argument is not LockPolicy::MUTEX
 template<LockPolicy lock_policy>
 class LockCond {
 public:
-  int Wait(LockMutex<lock_policy>&) {
-    return 0;
+  void wait(std::unique_lock<LockMutex<lock_policy>>&) {}
+  template<class Predicate>
+  void wait(std::unique_lock<LockMutex<lock_policy>>& lock, Predicate pred) {
+    while (!pred()) {
+      // TODO: PAUSE on x86
+      wait(lock);
+    }
   }
-  int Signal() {
-    return 0;
-  }
+  void notify_one() noexcept {}
 };
 
+#ifdef NDEBUG
+template<>
+class LockCond<LockPolicy::MUTEX> : public std::condition_variable
+{};
+#else
 template<>
 class LockCond<LockPolicy::MUTEX> {
 public:
-  int Wait(LockMutex<LockPolicy::MUTEX>& mutex) {
-    return cond.Wait(mutex.get());
+  void wait(std::unique_lock<LockMutexT<LockPolicy::MUTEX>>& lock) {
+    cond.Wait(lock.mutex()->native_handle());
   }
-  int Signal() {
-    return cond.Signal();
+  template<class Predicate>
+  void wait(std::unique_lock<LockMutexT<LockPolicy::MUTEX>>& lock,
+	    Predicate pred) {
+    while (!pred()) {
+      wait(lock);
+    }
+  }
+  void notify_one() noexcept {
+    cond.Signal();
   }
 private:
-  Cond& get() {
-    return cond;
-  }
   Cond cond;
-  friend class ::SharedLRUTest;
 };
+#endif	// NDEBUG
