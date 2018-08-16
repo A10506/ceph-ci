@@ -10,7 +10,8 @@ set(librbd_replay_srcs
     rbd_loc.cc
     Replayer.cc)
 add_library(rbd_replay STATIC ${librbd_replay_srcs})
-target_link_libraries(rbd_replay PRIVATE librbd librados global)
+target_link_libraries(rbd_replay PRIVATE
+  rbd_replay_types librbd librados global)
 
 add_executable(rbd-replay
   rbd-replay.cc)

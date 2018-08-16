@@ -283,16 +283,8 @@ add_subdirectory(json_spirit)
 include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/src/xxHash")
 include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/src/rapidjson/include")
 
-set(GMOCK_INCLUDE_DIRS
-  "${CMAKE_SOURCE_DIR}/src/googletest/googletest/include/gmock")
-set(GTEST_INCLUDE_DIRS
-  "${CMAKE_SOURCE_DIR}/src/googletest/googletest/include/gtest")
-
 include_directories("${CMAKE_SOURCE_DIR}/src/dmclock/src")
 include_directories("${CMAKE_SOURCE_DIR}/src/dmclock/support/src")
-
-# needed for source files that friend unit tests (e.g., using FRIEND_TEST)
-include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/src/googletest/googletest/include")
 
 if(WITH_SEASTAR)
   find_package(fmt 4.0.0 QUIET)
@@ -484,14 +476,8 @@ target_link_libraries(ceph-mon mon os global-static ceph-common
   ${CMAKE_DL_LIBS})
 install(TARGETS ceph-mon DESTINATION bin)
 
+
 # OSD/ObjectStore
-# make rocksdb statically
-
-if(NOT WITH_SYSTEM_ROCKSDB)
-  include(BuildRocksDB)
-  build_rocksdb()
-endif(NOT WITH_SYSTEM_ROCKSDB)
-
 include(TestBigEndian)
 test_big_endian(CEPH_BIG_ENDIAN)
 if(NOT CEPH_BIG_ENDIAN)
@@ -510,7 +496,7 @@ set(ceph_osd_srcs
   ceph_osd.cc)
 add_executable(ceph-osd ${ceph_osd_srcs})
 add_dependencies(ceph-osd erasure_code_plugins)
-target_link_libraries(ceph-osd osd os global-static common
+target_link_libraries(ceph-osd osd global-static common
   ${BLKID_LIBRARIES})
 if(WITH_FUSE)
   target_link_libraries(ceph-osd ${FUSE_LIBRARIES})
@@ -531,7 +517,22 @@ add_subdirectory(erasure-code)
 
 # Support/Tools
 if(WITH_TESTS)
-  add_subdirectory(googletest/googlemock)
+  option(WITH_SYSTEM_GTEST "require and build with system gtest and gmock" OFF)
+  if(WITH_SYSTEM_GTEST)
+    find_package(GTest REQUIRED)
+    find_package(GMock REQUIRED)
+  else()
+    add_subdirectory(googletest/googlemock)
+    add_library(GMock::GMock ALIAS gmock)
+    add_library(GMock::Main ALIAS gmock_main)
+    target_include_directories(gmock INTERFACE
+      $<TARGET_PROPERTY:gtest,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_include_directories(gmock_main INTERFACE
+      $<TARGET_PROPERTY:gtest,INTERFACE_INCLUDE_DIRECTORIES>)
+    add_library(GTest::GTest ALIAS gtest)
+    add_library(GTest::Main ALIAS gtest_main)
+  endif()
+
   add_subdirectory(test)
 endif(WITH_TESTS)
 
