@@ -1769,6 +1769,18 @@ void OSDMap::maybe_remove_pg_upmaps(CephContext *cct,
     vector<int> raw;
     int primary;
     tmpmap.pg_to_raw_up(pg, &raw, &primary);
+    auto size = tmpmap.get_pg_pool_size(pg);
+    if (size < 0) {
+      lderr(cct) << __func__ << " unable to get pool-size of pg "
+                 << pg << dendl;
+      continue;
+    }
+    if ((int)raw.size() > size) {
+      // probably because we have an old pg_upmap item and now pool-size
+      // is decreasing
+      to_cancel.insert(pg);
+      continue;
+    }
     set<int> parents;
     for (auto osd : raw) {
       if (type > 0) {
