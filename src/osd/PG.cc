@@ -1321,6 +1321,8 @@ void PG::calc_replicated_acting(
   vector<int> *want,
   set<pg_shard_t> *backfill,
   set<pg_shard_t> *acting_backfill,
+  const OSDMapRef osdmap,
+  CephContext *cct,
   ostream &ss)
 {
   pg_shard_t auth_log_shard_id = auth_log_shard->first;
@@ -1335,7 +1337,32 @@ void PG::calc_replicated_acting(
       !primary->second.is_incomplete() &&
       primary->second.last_update >=
         auth_log_shard->second.log_tail) {
-    ss << "up_primary: " << up_primary << ") selected as primary" << std::endl;
+    if (HAVE_FEATURE(osdmap->get_up_osd_features(), SERVER_NAUTILUS)) {
+      auto approx_objects_missing =
+        primary->second.stats.stats.sum.num_objects_missing;
+      auto auth_version = auth_log_shard->second.last_update.version;
+      auto primary_version = primary->second.last_update.version;
+      if (auth_version > primary_version) {
+        approx_objects_missing += auth_version - primary_version;
+      } else {
+        approx_objects_missing += primary_version - auth_version;
+      }
+      auto force_threshold = cct->_conf.get_val<uint64_t>(
+        "osd_force_auth_primary_missing_objects");
+      if ((uint64_t)approx_objects_missing > force_threshold) {
+        primary = auth_log_shard;
+        ss << "up_primary: " << up_primary << ") has approximate "
+           << approx_objects_missing << "(>" << force_threshold <<") "
+           << "missing objects, osd." << auth_log_shard_id
+           << " selected as primary instead"
+           << std::endl;
+      } else {
+        ss << "up_primary: " << up_primary << ") selected as primary"
+           << std::endl;
+      }
+    } else {
+      ss << "up_primary: " << up_primary << ") selected as primary" << std::endl;
+    }
   } else {
     ceph_assert(!auth_log_shard->second.is_incomplete());
     ss << "up[0] needs backfill, osd." << auth_log_shard_id
@@ -1679,6 +1706,8 @@ bool PG::choose_acting(pg_shard_t &auth_log_shard_id,
       &want,
       &want_backfill,
       &want_acting_backfill,
+      get_osdmap(),
+      cct,
       ss);
   else
     calc_ec_acting(

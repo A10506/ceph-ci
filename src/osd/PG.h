@@ -1450,6 +1450,8 @@ protected:
     vector<int> *want,
     set<pg_shard_t> *backfill,
     set<pg_shard_t> *acting_backfill,
+    const OSDMapRef osdmap,
+    CephContext *cct,
     ostream &ss);
   void choose_async_recovery_ec(const map<pg_shard_t, pg_info_t> &all_info,
                                 const pg_info_t &auth_info,
