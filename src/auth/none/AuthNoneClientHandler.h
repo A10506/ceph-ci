@@ -24,7 +24,6 @@ template<LockPolicy lock_policy>
 class AuthNoneClientHandler : public AuthClientHandler<lock_policy> {
   using AuthClientHandler<lock_policy>::cct;
   using AuthClientHandler<lock_policy>::global_id;
-  using AuthClientHandler<lock_policy>::lock;
 
 public:
   AuthNoneClientHandler(CephContext *cct_,
@@ -41,7 +40,6 @@ public:
   int get_protocol() const override { return CEPH_AUTH_NONE; }
   
   AuthAuthorizer *build_authorizer(uint32_t service_id) const override {
-    std::shared_lock l{lock};
     AuthNoneAuthorizer *auth = new AuthNoneAuthorizer();
     if (auth) {
       auth->build_authorizer(cct->_conf->name, global_id);
@@ -52,7 +50,6 @@ public:
   bool need_tickets() override { return false; }
 
   void set_global_id(uint64_t id) override {
-    std::unique_lock l{lock};
     global_id = id;
   }
 private:
