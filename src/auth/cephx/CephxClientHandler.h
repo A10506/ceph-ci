@@ -40,7 +40,6 @@ class CephxClientHandler : public AuthClientHandler<lock_policy> {
   using AuthClientHandler<lock_policy>::want;
   using AuthClientHandler<lock_policy>::have;
   using AuthClientHandler<lock_policy>::need;
-  using AuthClientHandler<lock_policy>::lock;
 
 public:
   CephxClientHandler(CephContext *cct_,
@@ -57,7 +56,6 @@ public:
   }
 
   void reset() override {
-    std::unique_lock l{lock};
     starting = true;
     server_challenge = 0;
   }
@@ -73,7 +71,6 @@ public:
   bool need_tickets() override;
 
   void set_global_id(uint64_t id) override {
-    std::unique_lock l{lock};
     global_id = id;
     tickets.global_id = id;
   }

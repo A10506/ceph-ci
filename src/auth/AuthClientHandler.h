@@ -18,7 +18,6 @@
 
 #include "auth/Auth.h"
 #include "common/lock_policy.h"
-#include "common/lock_shared_mutex.h"
 
 class CephContext;
 struct MAuthReply;
@@ -33,19 +32,16 @@ protected:
   uint32_t want;
   uint32_t have;
   uint32_t need;
-  mutable SharedMutexT<lock_policy> lock;
 
 public:
   explicit AuthClientHandler(CephContext *cct_)
-    : cct(cct_), global_id(0), want(CEPH_ENTITY_TYPE_AUTH), have(0), need(0),
-      lock{SharedMutex<lock_policy>::create("AuthClientHandler::lock")}
+    : cct(cct_), global_id(0), want(CEPH_ENTITY_TYPE_AUTH), have(0), need(0)
   {}
   virtual ~AuthClientHandler() {}
 
   void init(const EntityName& n) { name = n; }
   
   void set_want_keys(__u32 keys) {
-    std::unique_lock l{lock};
     want = keys | CEPH_ENTITY_TYPE_AUTH;
     validate_tickets();
   }
