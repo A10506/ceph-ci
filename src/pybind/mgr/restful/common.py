@@ -88,31 +88,33 @@ def pool_update_commands(pool_name, args):
 
     return commands
 
-
-def crush_rule_osds(nodes, rule):
-    nodes_by_id = dict((n['id'], n) for n in nodes)
+def crush_rule_osds(node_buckets, rule):
+    nodes_by_id = dict((b['id'], b) for b in node_buckets)
 
     def _gather_leaf_ids(node):
         if node['id'] >= 0:
             return set([node['id']])
 
         result = set()
-        for child_id in node['children']:
-            if child_id >= 0:
-                result.add(child_id)
+        for item in node['items']:
+            if item['id'] >= 0:
+                result.add(item['id'])
             else:
-                result |= _gather_leaf_ids(nodes_by_id[child_id])
+                result |= _gather_leaf_ids(nodes_by_id[item['id']])
 
         return result
 
     def _gather_descendent_ids(node, typ):
         result = set()
-        for child_id in node['children']:
-            child_node = nodes_by_id[child_id]
-            if child_node['type'] == typ:
-                result.add(child_node['id'])
-            elif 'children' in child_node:
-                result |= _gather_descendent_ids(child_node, typ)
+        for item in node['items']:
+            if item['id'] >= 0:
+                result.add(item['id'])
+            else:
+                child_node = nodes_by_id[item['id']]
+                if child_node['type_name'] == typ:
+                    result.add(child_node['id'])
+                elif 'items' in child_node:
+                    result |= _gather_descendent_ids(child_node, typ)
 
         return result
 
