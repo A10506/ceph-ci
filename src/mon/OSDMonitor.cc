@@ -1923,11 +1923,13 @@ bool OSDMonitor::do_prune(MonitorDBStore::TransactionRef tx)
   // pinned maps, and then allow us to use another ceph-mon without these
   // capabilities, without having to repair the store.
 
+  osdmap_manifest_t manifest = osdmap_manifest;
+
   version_t first = get_first_committed();
   version_t last = get_last_committed();
 
   version_t last_to_pin = last - g_conf()->mon_min_osdmap_epochs;
-  version_t last_pinned = osdmap_manifest.get_last_pinned();
+  version_t last_pinned = manifest.get_last_pinned();
   uint64_t prune_interval =
     g_conf().get_val<uint64_t>("mon_osdmap_full_prune_interval");
   uint64_t txsize =
@@ -1984,7 +1986,7 @@ bool OSDMonitor::do_prune(MonitorDBStore::TransactionRef tx)
 
   uint64_t num_pruned = 0;
   while (num_pruned + removal_interval <= txsize) { 
-    last_pinned = osdmap_manifest.get_last_pinned();
+    last_pinned = manifest.get_last_pinned();
 
     if (last_pinned + prune_interval > last_to_pin) {
       break;
@@ -1993,7 +1995,7 @@ bool OSDMonitor::do_prune(MonitorDBStore::TransactionRef tx)
 
     version_t next_pinned = last_pinned + prune_interval;
     ceph_assert(next_pinned <= last_to_pin);
-    osdmap_manifest.pin(next_pinned);
+    manifest.pin(next_pinned);
 
     dout(20) << __func__
 	     << " last_pinned " << last_pinned
@@ -2007,7 +2009,7 @@ bool OSDMonitor::do_prune(MonitorDBStore::TransactionRef tx)
     ceph_assert(map_exists(next_pinned));
 
     for (version_t v = last_pinned+1; v < next_pinned; ++v) {
-      ceph_assert(!osdmap_manifest.is_pinned(v));
+      ceph_assert(!manifest.is_pinned(v));
 
       dout(20) << __func__ << "   pruning full osdmap e" << v << dendl;
       string full_key = mon->store->combine_strings("full", v);
@@ -2019,8 +2021,8 @@ bool OSDMonitor::do_prune(MonitorDBStore::TransactionRef tx)
   ceph_assert(num_pruned > 0);
 
   bufferlist bl;
-  osdmap_manifest.encode(bl);
-  tx->put(get_service_name(), "osdmap_manifest", bl);
+  manifest.encode(bl);
+  tx->put(get_service_name(), "manifest", bl);
 
   return true;
 }
