@@ -3191,20 +3191,19 @@ BlueStore::Collection::Collection(BlueStore *store_, Cache *c, coll_t cid)
     cache(c),
     lock("BlueStore::Collection::lock", true, false),
     exists(true),
-    onode_map(c)
+    onode_map(c),
+    commit_queue(nullptr)
 {
   {
     std::lock_guard<std::mutex> l(store->zombie_osr_lock);
     auto p = store->zombie_osr_set.find(cid);
     if (p == store->zombie_osr_set.end()) {
       osr = new OpSequencer(store, cid);
-      osr->shard = cid.hash_to_shard(store->m_finisher_num);
     } else {
       osr = p->second;
       store->zombie_osr_set.erase(p);
       ldout(store->cct, 10) << "resurrecting zombie osr " << osr << dendl;
       osr->zombie = false;
-      assert(osr->shard == cid.hash_to_shard(store->m_finisher_num));
     }
   }
 }
@@ -3853,6 +3852,7 @@ BlueStore::BlueStore(CephContext *cct, const string& path)
 		       cct->_conf->bluestore_throttle_bytes +
 		       cct->_conf->bluestore_throttle_deferred_bytes),
     deferred_finisher(cct, "defered_finisher", "dfin"),
+    finisher(cct, "commit_finisher", "cfin"),
     kv_sync_thread(this),
     kv_finalize_thread(this),
     mempool_thread(this)
@@ -3872,6 +3872,7 @@ BlueStore::BlueStore(CephContext *cct,
 		       cct->_conf->bluestore_throttle_bytes +
 		       cct->_conf->bluestore_throttle_deferred_bytes),
     deferred_finisher(cct, "defered_finisher", "dfin"),
+    finisher(cct, "commit_finisher", "cfin"),
     kv_sync_thread(this),
     kv_finalize_thread(this),
     min_alloc_size(_min_alloc_size),
@@ -3885,10 +3886,6 @@ BlueStore::BlueStore(CephContext *cct,
 
 BlueStore::~BlueStore()
 {
-  for (auto f : finishers) {
-    delete f;
-  }
-  finishers.clear();
 
   cct->_conf.remove_observer(this);
   _shutdown_logger();
@@ -4089,23 +4086,6 @@ void BlueStore::_set_blob_size()
   }
   dout(10) << __func__ << " max_blob_size 0x" << std::hex << max_blob_size
            << std::dec << dendl;
-}
-
-void BlueStore::_set_finisher_num()
-{
-  if (cct->_conf->bluestore_shard_finishers) {
-    if (cct->_conf->osd_op_num_shards) {
-      m_finisher_num = cct->_conf->osd_op_num_shards;
-    } else {
-      assert(bdev);
-      if (bdev->is_rotational()) {
-	m_finisher_num = cct->_conf->osd_op_num_shards_hdd;
-      } else {
-	m_finisher_num = cct->_conf->osd_op_num_shards_ssd;
-      }
-    }
-  }
-  assert(m_finisher_num != 0);
 }
 
 int BlueStore::_set_cache_sizes()
@@ -6118,7 +6098,7 @@ int BlueStore::_fsck(bool deep, bool repair)
 
   mempool_thread.init();
 
-  // we need finishers and kv_{sync,finalize}_thread *just* for replay
+  // we need finisher and kv_{sync,finalize}_thread *just* for replay
   _kv_start();
   r = _deferred_replay();
   _kv_stop();
@@ -7256,6 +7236,20 @@ ObjectStore::CollectionHandle BlueStore::create_new_collection(
     cid);
   new_coll_map[cid] = c;
   return c;
+}
+
+void BlueStore::set_collection_commit_queue(
+    const coll_t& cid,
+    class ContextQueue *commit_queue)
+{
+  if (commit_queue) {
+    RWLock::RLocker l(coll_lock);
+    if (coll_map.count(cid)) {
+      coll_map[cid]->commit_queue = commit_queue;
+    } else if (new_coll_map.count(cid)) {
+      new_coll_map[cid]->commit_queue = commit_queue;
+    }
+  }
 }
 
 bool BlueStore::exists(CollectionHandle &c_, const ghobject_t& oid)
@@ -8533,8 +8527,6 @@ int BlueStore::_open_super_meta()
   _set_compression();
   _set_blob_size();
 
-  _set_finisher_num();
-
   _validate_bdev();
   return 0;
 }
@@ -8915,7 +8907,10 @@ void BlueStore::_txc_committed_kv(TransContext *txc)
   {
     std::lock_guard<std::mutex> l(txc->osr->qlock);
     txc->state = TransContext::STATE_KV_DONE;
-    finishers[txc->osr->shard]->queue(txc->oncommits);
+    if (txc->ch->commit_queue)
+      txc->ch->commit_queue->queue(txc->oncommits);
+    else
+      finisher.queue(txc->oncommits);
   }
   txc->log_state_latency(logger, l_bluestore_state_kv_committing_lat);
   logger->tinc(l_bluestore_commit_lat, ceph_clock_now() - txc->start);
@@ -9127,17 +9122,8 @@ void BlueStore::_kv_start()
 {
   dout(10) << __func__ << dendl;
 
-  for (int i = 0; i < m_finisher_num; ++i) {
-    ostringstream oss;
-    oss << "finisher-" << i;
-    Finisher *f = new Finisher(cct, oss.str(), "finisher");
-    finishers.push_back(f);
-  }
-
   deferred_finisher.start();
-  for (auto f : finishers) {
-    f->start();
-  }
+  finisher.start();
   kv_sync_thread.create("bstore_kv_sync");
   kv_finalize_thread.create("bstore_kv_final");
 }
@@ -9175,10 +9161,8 @@ void BlueStore::_kv_stop()
   dout(10) << __func__ << " stopping finishers" << dendl;
   deferred_finisher.wait_for_empty();
   deferred_finisher.stop();
-  for (auto f : finishers) {
-    f->wait_for_empty();
-    f->stop();
-  }
+  finisher.stop();
+
   dout(10) << __func__ << " stopped" << dendl;
 }
 
@@ -9801,8 +9785,11 @@ int BlueStore::queue_transactions(
   for (auto c : on_applied_sync) {
     c->complete(0);
   }
-  for (auto c : on_applied) {
-    finishers[osr->shard]->queue(c);
+  if (on_applied.size()) {
+    if (txc->ch->commit_queue)
+      txc->ch->commit_queue->queue(on_applied);
+    else
+      finisher.queue(on_applied);
   }
 
   logger->tinc(l_bluestore_submit_lat, mono_clock::now() - start);
