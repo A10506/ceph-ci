@@ -1189,8 +1189,22 @@ protected:
 
   set<pg_shard_t> backfill_targets,  async_recovery_targets;
 
+  // The primaries num_bytes for this pg, only valid during backfill
+  int64_t primary_num_bytes = 0;
+
+public:
   bool is_backfill_targets(pg_shard_t osd) {
     return backfill_targets.count(osd);
+  }
+
+  int64_t get_primary_num_bytes() {
+    return primary_num_bytes;
+  }
+
+  void set_primary_num_bytes(int64_t num_bytes);
+
+  object_stat_collection_t *get_stats() {
+    return &info.stats.stats;
   }
 
 protected:
@@ -1831,6 +1845,7 @@ protected:
   };
 
 public:
+  int pg_stat_adjust(osd_stat_t &new_stat);
 protected:
 
   struct AdvMap : boost::statechart::event< AdvMap > {
