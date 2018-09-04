@@ -40,18 +40,20 @@ function run() {
 }
 
 
-function get_num_backfilling() {
+function get_num_in_state() {
+    local state=$1
     local expression
-    expression+="select(contains(\"backfilling\"))"
+    expression+="select(contains(\"${state}\"))"
     ceph --format json pg dump pgs 2>/dev/null | \
         jq "[.[] | .state | $expression] | length"
 }
 
 
-function wait_for_backfill() {
-    local num_backfilling=-1
-    local cur_backfilling
-    local -a delays=($(get_timeout_delays $1 5))
+function wait_for_state() {
+    local state=$1
+    local num_in_state=-1
+    local cur_in_state
+    local -a delays=($(get_timeout_delays $2 5))
     local -i loop=0
 
     flush_pg_stats || return 1
@@ -60,19 +62,32 @@ function wait_for_backfill() {
     done
 
     while true ; do
-        cur_backfilling=$(get_num_backfilling)
-        test $cur_backfilling = "0" && break
-        if test $cur_backfilling != $num_backfilling ; then
+        cur_in_state=$(get_num_in_state ${state})
+        test $cur_in_state = "0" && break
+        if test $cur_in_state != $num_in_state ; then
             loop=0
-            num_backfilling=$cur_backfilling
+            num_in_state=$cur_in_state
         elif (( $loop >= ${#delays[*]} )) ; then
             ceph pg dump pgs
             return 1
         fi
+        ceph pg dump pgs
         sleep ${delays[$loop]}
         loop+=1
     done
     return 0
+}
+
+
+function wait_for_backfill() {
+    local timeout=$1
+    wait_for_state backfilling $timeout
+}
+
+
+function wait_for_active() {
+    local timeout=$1
+    wait_for_state activating $timeout
 }
 
 
@@ -116,6 +131,7 @@ function TEST_backfill_test_simple() {
     done
 
     wait_for_backfill 60
+    wait_for_active 60
 
     ERRORS=0
     if [ "$(ceph pg dump pgs | grep +backfill_toofull | wc -l)" != "1" ];
@@ -182,6 +198,7 @@ function TEST_backfill_test_multi() {
       ceph osd pool set "${poolprefix}$p" size 2
     done
     wait_for_backfill 60
+    wait_for_active 60
 
     ERRORS=0
     if [ "$(ceph pg dump pgs | grep +backfill_toofull | wc -l)" != "1" ];
@@ -299,6 +316,7 @@ function TEST_backfill_test_sametarget() {
     ceph osd pool set $pool1 size 2
     ceph osd pool set $pool2 size 2
     wait_for_backfill 60
+    wait_for_active 60
 
     ERRORS=0
     if [ "$(ceph pg dump pgs | grep +backfill_toofull | wc -l)" != "1" ];
