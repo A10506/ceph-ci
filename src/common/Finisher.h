@@ -205,7 +205,7 @@ public:
 
     if (empty) {
       mutex.Lock();
-      cond.SignalOne();
+      cond.Signal();
       mutex.Unlock();
     }
 
