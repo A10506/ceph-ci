@@ -42,7 +42,7 @@
 #include "rgw_rest_role.h"
 #include "rgw_crypt.h"
 #include "rgw_crypt_sanitize.h"
-
+#include "rgw_rest_user_policy.h"
 #include "include/assert.h"
 
 #define dout_context g_ceph_context
@@ -1436,7 +1436,7 @@ void RGWPutObj_ObjStore_S3::send_response()
       if (strftime(buf, sizeof(buf), "%Y-%m-%dT%T.000Z", &tmp) > 0) {
         s->formatter->dump_string("LastModified", buf);
       }
-      dump_etag(s, etag);
+      s->formatter->dump_string("ETag", etag);
       s->formatter->close_section();
       rgw_flush_formatter_and_reset(s, s->formatter);
       return;
@@ -2201,7 +2201,9 @@ void RGWCopyObj_ObjStore_S3::send_response()
 
   if (op_ret == 0) {
     dump_time(s, "LastModified", &mtime);
-    dump_etag(s, etag);
+    if (!etag.empty()) {
+      s->formatter->dump_string("ETag", std::move(etag));
+    }
     s->formatter->close_section();
     rgw_flush_formatter_and_reset(s, s->formatter);
   }
@@ -2370,13 +2372,13 @@ int RGWPutCORS_ObjStore_S3::get_params()
   }
 
   if (!data || !parser.parse(data, len, 1)) {
-    return -EINVAL;
+    return -ERR_MALFORMED_XML;
   }
   cors_config =
     static_cast<RGWCORSConfiguration_S3 *>(parser.find_first(
 					     "CORSConfiguration"));
   if (!cors_config) {
-    return -EINVAL;
+    return -ERR_MALFORMED_XML;
   }
 
 #define CORS_RULES_MAX_NUM      100
@@ -3003,6 +3005,14 @@ RGWOp *RGWHandler_REST_Service_S3::op_post()
       return new RGWListRolePolicies;
     if (action.compare("DeleteRolePolicy") == 0)
       return new RGWDeleteRolePolicy;
+    if (action.compare("PutUserPolicy") == 0)
+      return new RGWPutUserPolicy;
+    if (action.compare("GetUserPolicy") == 0)
+      return new RGWGetUserPolicy;
+    if (action.compare("ListUserPolicies") == 0)
+      return new RGWListUserPolicies;
+    if (action.compare("DeleteUserPolicy") == 0)
+      return new RGWDeleteUserPolicy;
   }
   return NULL;
 }

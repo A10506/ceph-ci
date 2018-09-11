@@ -385,7 +385,8 @@ function unfound_erasure_coded() {
 	ceph -s | grep "1/1 objects unfound" && break
 	sleep 1
     done
-    ceph -s|grep "4 osds: 4 up, 4 in" || return 1
+    ceph -s|grep "4 up" || return 1
+    ceph -s|grep "4 in" || return 1
     ceph -s|grep "1/1 objects unfound" || return 1
 
     teardown $dir || return 1
@@ -466,7 +467,7 @@ function list_missing_erasure_coded() {
 
     for i in $(seq 0 120) ; do
         [ $i -lt 60 ] || return 1
-        matches=$(ceph pg $pg list_missing | egrep "MOBJ0|MOBJ1" | wc -l)
+        matches=$(ceph pg $pg list_unfound | egrep "MOBJ0|MOBJ1" | wc -l)
         [ $matches -eq 2 ] && break
     done
 
