@@ -77,7 +77,7 @@ private:
     raw(const raw &other) = delete;
     const raw& operator=(const raw &other) = delete;
 public:
-    virtual char *get_data() {
+    virtual char *get_data() final {
       return data;
     }
     virtual raw* clone_empty() = 0;
@@ -85,12 +85,6 @@ public:
       raw *c = clone_empty();
       memcpy(c->data, data, len);
       return c;
-    }
-    virtual bool can_zero_copy() const {
-      return false;
-    }
-    virtual int zero_copy_to_fd(int fd, loff_t *offset) {
-      return -ENOTSUP;
     }
     virtual bool is_page_aligned() {
       return ((long)data & ~CEPH_PAGE_MASK) == 0;
