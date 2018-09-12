@@ -9857,8 +9857,8 @@ int BlueStore::queue_transactions(
     c->complete(0);
   }
   if (on_applied.size()) {
-    if (txc->ch->commit_queue)
-      txc->ch->commit_queue->queue(on_applied);
+    if (c->commit_queue)
+      c->commit_queue->queue(on_applied);
     else
       finisher.queue(on_applied);
   }
