@@ -6035,6 +6035,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	    break;
 	}
 	result = _delete_oid(ctx, true, false);
+        ctx->dirty_desc.invalidate();
 	if (result >= 0) {
 	  // mark that this is a cache eviction to avoid triggering normal
 	  // make_writeable() clone creation in finish_ctx()
@@ -6441,6 +6442,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	} else {
 	  t->write(
 	    soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags);
+          ctx->dirty_desc.dirty_data_range(op.extent.offset, op.extent.length);
 	}
 
 	if (op.extent.offset == 0 && op.extent.length >= oi.size
@@ -6487,6 +6489,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	if (op.extent.length) {
 	  t->write(soid, 0, op.extent.length, osd_op.indata, op.flags);
+          ctx->dirty_desc.dirty_data();
 	}
         if (!skip_data_digest) {
 	  obs.oi.set_data_digest(osd_op.indata.crc32c(-1));
@@ -6509,6 +6512,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       ++ctx->num_write;
       tracepoint(osd, do_osd_op_pre_rollback, soid.oid.name.c_str(), soid.snap.val);
       result = _rollback_to(ctx, op);
+      ctx->dirty_desc.invalidate();
       break;
 
     case CEPH_OSD_OP_ZERO:
@@ -6530,6 +6534,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  t->zero(soid, op.extent.offset, op.extent.length);
 	  interval_set<uint64_t> ch;
 	  ch.insert(op.extent.offset, op.extent.length);
+          ctx->dirty_desc.dirty_data_range(ch);
 	  ctx->modified_ranges.union_of(ch);
 	  ctx->delta_stats.num_wr++;
 	  oi.clear_data_digest();
@@ -6649,6 +6654,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  } 
 	} 
 	result = _delete_oid(ctx, false, ctx->ignore_cache);
+        ctx->dirty_desc.invalidate();
       }
       break;
 
@@ -6876,6 +6882,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  if (!has_reference && need_reference) {
 	    oi.set_flag(object_info_t::FLAG_REDIRECT_HAS_REFERENCE);
 	  }
+          ctx->dirty_desc.invalidate();
 	  dout(10) << "set-redirect oid:" << oi.soid << " user_version: " << oi.user_version << dendl;
 	  if (op_finisher) {
 	    ctx->op_finishers.erase(ctx->current_osd_subop_num);
@@ -6981,6 +6988,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	    oi.manifest.chunk_map[src_offset].set_flag(chunk_info_t::FLAG_HAS_FINGERPRINT);
 	  }
 	  ctx->modify = true;
+          ctx->dirty_desc.invalidate(); // This is overkilling, probably..
 
 	  dout(10) << "set-chunked oid:" << oi.soid << " user_version: " << oi.user_version 
 		   << " chunk_info: " << chunk_info << dendl;
@@ -7044,6 +7052,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	} else {
 	  result = op_finisher->execute();
 	  ceph_assert(result == 0);
+          ctx->dirty_desc.invalidate();
 	  ctx->op_finishers.erase(ctx->current_osd_subop_num);
 	}
       }
@@ -7099,6 +7108,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	ctx->delta_stats.num_objects_manifest--;
 	ctx->delta_stats.num_wr++;
 	ctx->modify = true;
+        ctx->dirty_desc.invalidate();
       }
 
       break;
@@ -7511,6 +7521,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  }
 	}
 	t->omap_setkeys(soid, to_set_bl);
+        ctx->dirty_desc.dirty_omap();
 	ctx->delta_stats.num_wr++;
         ctx->delta_stats.num_wr_kb += shift_round_up(to_set_bl.length(), 10);
       }
@@ -7528,6 +7539,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       {
 	maybe_create_new_object(ctx);
 	t->omap_setheader(soid, osd_op.indata);
+        ctx->dirty_desc.dirty_omap_header();
 	ctx->delta_stats.num_wr++;
       }
       obs.oi.set_flag(object_info_t::FLAG_OMAP);
@@ -7548,6 +7560,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	if (oi.is_omap()) {
 	  t->omap_clear(soid);
+          ctx->dirty_desc.dirty_omap();
 	  ctx->delta_stats.num_wr++;
 	  obs.oi.clear_omap_digest();
 	  obs.oi.clear_flag(object_info_t::FLAG_OMAP);
@@ -7579,6 +7592,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	tracepoint(osd, do_osd_op_pre_omaprmkeys, soid.oid.name.c_str(), soid.snap.val);
 	t->omap_rmkeys(soid, to_rm_bl);
+        ctx->dirty_desc.dirty_omap();
 	ctx->delta_stats.num_wr++;
       }
       obs.oi.clear_omap_digest();
@@ -7592,6 +7606,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	result = do_copy_get(ctx, bp, osd_op, ctx->obc);
       } else {
 	result = op_finisher->execute();
+        ctx->dirty_desc.invalidate();
       }
       break;
 
@@ -7660,6 +7675,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 
           // COPY_FROM cannot be executed multiple times -- it must restart
           ctx->op_finishers.erase(ctx->current_osd_subop_num);
+          ctx->dirty_desc.invalidate();
 	}
       }
       break;

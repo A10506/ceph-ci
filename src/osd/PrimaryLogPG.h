@@ -558,6 +558,7 @@ public:
 
     PGTransactionUPtr op_t;
     vector<pg_log_entry_t> log;
+    ObjectDirtyDesc dirty_desc;
     boost::optional<pg_hit_set_history_t> updated_hset_history;
 
     interval_set<uint64_t> modified_ranges;

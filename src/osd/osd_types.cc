@@ -3981,6 +3981,47 @@ void ObjectModDesc::decode(bufferlist::const_iterator &_bl)
   DECODE_FINISH(_bl);
 }
 
+void ObjectDirtyDesc::encode(bufferlist &bl) const
+{
+  ENCODE_START(1, 1, bl);
+  encode(dirty_flags, bl);
+  encode(dirty_ranges, bl);
+  ENCODE_FINISH(bl);
+}
+
+void ObjectDirtyDesc::decode(bufferlist::const_iterator &bl)
+{
+  DECODE_START(1, bl);
+  decode(dirty_flags, bl);
+  decode(dirty_ranges, bl);
+  DECODE_FINISH(bl);
+}
+
+void ObjectDirtyDesc::dump(Formatter *f) const
+{
+  f->open_object_section("object_dirty_desc");
+  f->dump_string("dirty_flags", dirty_flags_str());
+  f->dump_stream("dirty_ranges") << get_dirty_ranges();
+  f->close_section();
+}
+
+void ObjectDirtyDesc::generate_test_instances(list<ObjectDirtyDesc*>& o)
+{
+  o.push_back(new ObjectDirtyDesc());
+  o.push_back(new ObjectDirtyDesc());
+  o.back()->dirty_data_range(0, 123);
+  o.back()->dirty_data_range(0, 456);
+  o.back()->dirty_omap_header();
+  o.back()->dirty_omap();
+}
+
+ostream& operator<<(ostream& out, const ObjectDirtyDesc& odd)
+{
+  return out << "dirty_desc(dirty_flags = " << odd.dirty_flags_str()
+             << " dirty_ranges = " << odd.get_dirty_ranges()
+             << ")";
+}
+
 // -- pg_log_entry_t --
 
 string pg_log_entry_t::get_key_name() const
@@ -4013,7 +4054,7 @@ void pg_log_entry_t::decode_with_checksum(bufferlist::const_iterator& p)
 
 void pg_log_entry_t::encode(bufferlist &bl) const
 {
-  ENCODE_START(11, 4, bl);
+  ENCODE_START(12, 4, bl);
   encode(op, bl);
   encode(soid, bl);
   encode(version, bl);
@@ -4040,12 +4081,13 @@ void pg_log_entry_t::encode(bufferlist &bl) const
   encode(extra_reqids, bl);
   if (op == ERROR)
     encode(return_code, bl);
+  encode(dirty_desc, bl);
   ENCODE_FINISH(bl);
 }
 
 void pg_log_entry_t::decode(bufferlist::const_iterator &bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(11, 4, 4, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(12, 4, 4, bl);
   decode(op, bl);
   if (struct_v < 2) {
     sobject_t old_soid;
@@ -4099,6 +4141,10 @@ void pg_log_entry_t::decode(bufferlist::const_iterator &bl)
     decode(extra_reqids, bl);
   if (struct_v >= 11 && op == ERROR)
     decode(return_code, bl);
+  if (struct_v >= 12)
+    decode(dirty_desc, bl);
+  else
+    dirty_desc.invalidate();
   DECODE_FINISH(bl);
 }
 
@@ -4141,6 +4187,11 @@ void pg_log_entry_t::dump(Formatter *f) const
     mod_desc.dump(f);
     f->close_section();
   }
+  {
+    f->open_object_section("dirty_desc");
+    dirty_desc.dump(f);
+    f->close_section();
+  }
 }
 
 void pg_log_entry_t::generate_test_instances(list<pg_log_entry_t*>& o)
@@ -4160,7 +4211,7 @@ ostream& operator<<(ostream& out, const pg_log_entry_t& e)
   out << e.version << " (" << e.prior_version << ") "
       << std::left << std::setw(8) << e.get_op_name() << ' '
       << e.soid << " by " << e.reqid << " " << e.mtime
-      << " " << e.return_code;
+      << " " << e.return_code << " " << e.dirty_desc;
   if (e.snaps.length()) {
     vector<snapid_t> snaps;
     bufferlist c = e.snaps;

@@ -3426,6 +3426,101 @@ public:
 };
 WRITE_CLASS_ENCODER(ObjectModDesc)
 
+class ObjectDirtyDesc {
+  enum {
+    DIRTY_FLAG_INVALID     = 1, // will do complete(traditional) recovery later
+    DIRTY_FLAG_DATA        = 2, // data is dirty
+    DIRTY_FLAG_OMAP        = 4, // omap is dirty
+    DIRTY_FLAG_OMAP_HEADER = 8, // omap-header is dirty
+  };
+  uint32_t dirty_flags = 0;
+  interval_set<uint64_t> dirty_ranges;
+
+  bool has_flag(uint32_t f) const { return dirty_flags & f; }
+  void set_flag(uint32_t f) { dirty_flags |= f; }
+
+public:
+
+  bool is_valid() const { return !has_flag(DIRTY_FLAG_INVALID); }
+  bool is_data_dirty() const { return has_flag(DIRTY_FLAG_DATA); }
+  bool is_omap_dirty() const { return has_flag(DIRTY_FLAG_OMAP); }
+  bool is_omap_header_dirty() const {
+    return has_flag(DIRTY_FLAG_OMAP_HEADER);
+  }
+  uint32_t get_dirty_flags() const { return dirty_flags; }
+  string dirty_flags_str() const {
+    if (has_flag(DIRTY_FLAG_INVALID)) {
+      return "invalid";
+    }
+    string s;
+    if (has_flag(DIRTY_FLAG_DATA)) {
+      s = "data";
+    }
+    if (has_flag(DIRTY_FLAG_OMAP)) {
+      if (s.length())
+        s += '+';
+      s += "omap";
+    }
+    if (has_flag(DIRTY_FLAG_OMAP_HEADER)) {
+      if (s.length())
+        s += '+';
+      s += "omap_header";
+    }
+    return s;
+  }
+  const interval_set<uint64_t>& get_dirty_ranges() const {
+    return dirty_ranges;
+  }
+  void invalidate() {
+    dirty_flags = 0; // paranoia
+    set_flag(DIRTY_FLAG_INVALID);
+    dirty_ranges.clear();
+  }
+  void dirty_data_range(interval_set<uint64_t> &dirty) {
+    if (is_valid()) {
+      set_flag(DIRTY_FLAG_DATA);
+      dirty_ranges.union_of(dirty);
+    }
+  }
+  void dirty_data_range(uint64_t offset, uint64_t length) {
+    if (is_valid() && length) {
+      set_flag(DIRTY_FLAG_DATA);
+      interval_set<uint64_t> dirty;
+      dirty.insert(offset, length);
+      dirty_ranges.union_of(dirty);
+    }
+  }
+  // mark the whole data part as dirty
+  void dirty_data() {
+    dirty_data_range(0, -1);
+  }
+  void dirty_omap_header() {
+    if (is_valid()) {
+      set_flag(DIRTY_FLAG_OMAP_HEADER);
+    }
+  }
+  void dirty_omap() {
+    if (is_valid()) {
+      set_flag(DIRTY_FLAG_OMAP);
+    }
+  }
+  void merge(const ObjectDirtyDesc &other) {
+    if (!is_valid() || !other.is_valid()) {
+      invalidate();
+      return;
+    }
+    // merge dirty_flags and dirty_ranges respectively
+    set_flag(other.get_dirty_flags());
+    dirty_ranges.union_of(other.get_dirty_ranges());
+  }
+
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::const_iterator &bl);
+  void dump(Formatter *f) const;
+  static void generate_test_instances(list<ObjectDirtyDesc*>& o);
+};
+WRITE_CLASS_ENCODER(ObjectDirtyDesc)
+ostream& operator<<(ostream& out, const ObjectDirtyDesc& odd);
 
 /**
  * pg_log_entry_t - single entry/event in pg log
@@ -3474,6 +3569,7 @@ struct pg_log_entry_t {
 
   // describes state for a locally-rollbackable entry
   ObjectModDesc mod_desc;
+  ObjectDirtyDesc dirty_desc;
   bufferlist snaps;   // only for clone entries
   hobject_t  soid;
   osd_reqid_t reqid;  // caller+tid to uniquely identify request
@@ -3498,6 +3594,17 @@ struct pg_log_entry_t {
                 const osd_reqid_t& rid, const utime_t& mt,
                 int return_code)
    : soid(_soid), reqid(rid), version(v), prior_version(pv), user_version(uv),
+     mtime(mt), return_code(return_code), op(_op),
+     invalid_hash(false), invalid_pool(false) {
+    snaps.reassign_to_mempool(mempool::mempool_osd_pglog);
+  }
+  pg_log_entry_t(int _op, const hobject_t& _soid,
+                const eversion_t& v, const eversion_t& pv,
+                version_t uv,
+                const osd_reqid_t& rid, const utime_t& mt,
+                int return_code, const ObjectDirtyDesc& dirty_desc)
+   : dirty_desc(dirty_desc), soid(_soid), reqid(rid),
+     version(v), prior_version(pv), user_version(uv),
      mtime(mt), return_code(return_code), op(_op),
      invalid_hash(false), invalid_pool(false) {
     snaps.reassign_to_mempool(mempool::mempool_osd_pglog);
