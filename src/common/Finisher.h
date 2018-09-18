@@ -193,17 +193,21 @@ public:
   ContextQueue(Mutex& mut, Cond& con) : mutex(mut), cond(con) {}
 
   void queue(list<Context *>& ls) {
+    bool empty = false;
     {
       std::scoped_lock l(q_mutex);
-      if (q.empty())
+      if (q.empty()) {
 	q.swap(ls);
-      else
+	empty = true;
+      } else
 	q.insert(q.end(), ls.begin(), ls.end());
     }
 
-    mutex.Lock();
-    cond.SignalOne();
-    mutex.Unlock();
+    if (empty) {
+      mutex.Lock();
+      cond.SignalOne();
+      mutex.Unlock();
+    }
 
     ls.clear();
   }
