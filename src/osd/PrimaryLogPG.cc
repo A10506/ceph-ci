@@ -1638,18 +1638,36 @@ void PrimaryLogPG::calc_trim_to()
 	cct->_conf->osd_pg_log_trim_max >= cct->_conf->osd_pg_log_trim_min) {
       return;
     }
-    list<pg_log_entry_t>::const_iterator it = pg_log.get_log().log.begin();
+    auto it = pg_log.get_log().log.begin(); // oldest log entry
+    auto rit = pg_log.get_log().log.rbegin();
+    eversion_t candidate;
     eversion_t new_trim_to;
-    for (uint64_t i = 0; i < num_to_trim; ++i) {
-      new_trim_to = it->version;
-      ++it;
-      if (new_trim_to >= limit) {
-	new_trim_to = limit;
-        dout(10) << "calc_trim_to trimming to limit: " << limit << dendl;
-	break;
+    size_t i = 0;
+    while(it != pg_log.get_log().log.end()) {
+      i++;
+      if (i > target) {
+        new_trim_to = rit->version;
+        break;
       }
+      if (i >= num_to_trim) {
+        candidate = it->version; // maybe
+      }
+      it++;
+      rit++;
     }
-    dout(10) << "calc_trim_to " << pg_trim_to << " -> " << new_trim_to << dendl;
+    if (it == pg_log.get_log().log.end()) {
+      dout(10) << __func__ << " not enough log left to trim" << dendl;
+      return; // nothing to trim
+    }
+    if (new_trim_to > candidate) {
+      new_trim_to = candidate;
+    }
+    if (new_trim_to >= limit) {
+      new_trim_to = limit;
+      dout(10) << __func__ << " trimming to limit: " << limit << dendl;
+    }
+    dout(10) << __func__ << " " << pg_trim_to << " -> "
+             << new_trim_to << dendl;
     pg_trim_to = new_trim_to;
     ceph_assert(pg_trim_to <= pg_log.get_head());
   }
