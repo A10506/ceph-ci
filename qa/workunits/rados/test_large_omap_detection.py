@@ -73,7 +73,7 @@ def get_deep_scrub_timestamp(pgid):
     cmd = ['ceph', 'pg', 'dump', '--format=json-pretty']
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     out = proc.communicate()[0]
-    for stat in json.loads(out)['pg_stats']:
+    for stat in json.loads(out)['pg_map']['pg_stats']:
         if stat['pgid'] == pgid:
             return stat['last_deep_scrub_stamp']
 
