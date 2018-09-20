@@ -10,7 +10,6 @@
 #include "librbd/ImageState.h"
 #include "librbd/Operations.h"
 #include "librbd/image/TypeTraits.h"
-#include "librbd/image/AttachParentRequest.h"
 #include "librbd/image/CreateRequest.h"
 #include "librbd/image/RemoveRequest.h"
 #include "librbd/image/RefreshRequest.h"
@@ -48,28 +47,6 @@ MockTestImageCtx* MockTestImageCtx::s_instance = nullptr;
 } // anonymous namespace
 
 namespace image {
-
-template <>
-struct AttachParentRequest<MockTestImageCtx> {
-  Context* on_finish = nullptr;
-  static AttachParentRequest* s_instance;
-  static AttachParentRequest* create(MockTestImageCtx&,
-                                     const cls::rbd::ParentImageSpec& pspec,
-                                     uint64_t parent_overlap,
-                                     Context *on_finish) {
-    ceph_assert(s_instance != nullptr);
-    s_instance->on_finish = on_finish;
-    return s_instance;
-  }
-
-  MOCK_METHOD0(send, void());
-
-  AttachParentRequest() {
-    s_instance = this;
-  }
-};
-
-AttachParentRequest<MockTestImageCtx>* AttachParentRequest<MockTestImageCtx>::s_instance = nullptr;
 
 template <>
 struct CreateRequest<MockTestImageCtx> {
@@ -190,7 +167,6 @@ using ::testing::WithArg;
 class TestMockImageCloneRequest : public TestMockFixture {
 public:
   typedef CloneRequest<MockTestImageCtx> MockCloneRequest;
-  typedef AttachParentRequest<MockTestImageCtx> MockAttachParentRequest;
   typedef CreateRequest<MockTestImageCtx> MockCreateRequest;
   typedef RefreshRequest<MockTestImageCtx> MockRefreshRequest;
   typedef RemoveRequest<MockTestImageCtx> MockRemoveRequest;
@@ -260,10 +236,12 @@ public:
     }
   }
 
-  void expect_attach_parent(MockAttachParentRequest& mock_request, int r) {
-    EXPECT_CALL(mock_request, send())
-      .WillOnce(Invoke([this, &mock_request, r]() {
-                  image_ctx->op_work_queue->queue(mock_request.on_finish, r);
+  void expect_set_parent(MockImageCtx &mock_image_ctx, int r) {
+    EXPECT_CALL(get_mock_io_ctx(mock_image_ctx.md_ctx),
+                exec(mock_image_ctx.header_oid, _, StrEq("rbd"),
+                     StrEq("set_parent"), _, _, _))
+      .WillOnce(InvokeWithoutArgs([r]() {
+                  return r;
                 }));
   }
 
@@ -282,8 +260,7 @@ public:
   void expect_child_attach(MockImageCtx &mock_image_ctx, int r) {
     bufferlist bl;
     encode(mock_image_ctx.snap_id, bl);
-    encode(cls::rbd::ChildImageSpec{m_ioctx.get_id(), "", mock_image_ctx.id},
-           bl);
+    encode(cls::rbd::ChildImageSpec{m_ioctx.get_id(), mock_image_ctx.id}, bl);
 
     EXPECT_CALL(get_mock_io_ctx(mock_image_ctx.md_ctx),
                 exec(mock_image_ctx.header_oid, _, StrEq("rbd"),
@@ -394,10 +371,7 @@ TEST_F(TestMockImageCloneRequest, SuccessV1) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, 0);
-
+  expect_set_parent(mock_image_ctx, 0);
   expect_add_child(m_ioctx, 0);
 
   MockRefreshRequest mock_refresh_request;
@@ -445,9 +419,7 @@ TEST_F(TestMockImageCloneRequest, SuccessV2) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, 0);
+  expect_set_parent(mock_image_ctx, 0);
 
   expect_op_features_set(m_ioctx, mock_image_ctx.id, 0);
   expect_child_attach(mock_image_ctx, 0);
@@ -495,10 +467,7 @@ TEST_F(TestMockImageCloneRequest, SuccessAuto) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, 0);
-
+  expect_set_parent(mock_image_ctx, 0);
   expect_add_child(m_ioctx, 0);
 
   MockRefreshRequest mock_refresh_request;
@@ -605,7 +574,7 @@ TEST_F(TestMockImageCloneRequest, OpenError) {
   ASSERT_EQ(-EINVAL, ctx.wait());
 }
 
-TEST_F(TestMockImageCloneRequest, AttachParentError) {
+TEST_F(TestMockImageCloneRequest, SetParentError) {
   REQUIRE_FEATURE(RBD_FEATURE_LAYERING);
 
   MockTestImageCtx mock_image_ctx(*image_ctx);
@@ -621,10 +590,7 @@ TEST_F(TestMockImageCloneRequest, AttachParentError) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, -EINVAL);
-
+  expect_set_parent(mock_image_ctx, -EINVAL);
   expect_close(mock_image_ctx, 0);
 
   MockRemoveRequest mock_remove_request;
@@ -658,10 +624,7 @@ TEST_F(TestMockImageCloneRequest, AddChildError) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, 0);
-
+  expect_set_parent(mock_image_ctx, 0);
   expect_add_child(m_ioctx, -EINVAL);
   expect_close(mock_image_ctx, 0);
 
@@ -696,10 +659,7 @@ TEST_F(TestMockImageCloneRequest, RefreshError) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, 0);
-
+  expect_set_parent(mock_image_ctx, 0);
   expect_add_child(m_ioctx, 0);
 
   MockRefreshRequest mock_refresh_request;
@@ -738,10 +698,7 @@ TEST_F(TestMockImageCloneRequest, MetadataListError) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, 0);
-
+  expect_set_parent(mock_image_ctx, 0);
   expect_add_child(m_ioctx, 0);
 
   MockRefreshRequest mock_refresh_request;
@@ -782,9 +739,7 @@ TEST_F(TestMockImageCloneRequest, MetadataSetError) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, 0);
+  expect_set_parent(mock_image_ctx, 0);
 
   expect_op_features_set(m_ioctx, mock_image_ctx.id, 0);
   expect_child_attach(mock_image_ctx, 0);
@@ -825,10 +780,7 @@ TEST_F(TestMockImageCloneRequest, GetMirrorModeError) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, 0);
-
+  expect_set_parent(mock_image_ctx, 0);
   expect_add_child(m_ioctx, 0);
 
   MockRefreshRequest mock_refresh_request;
@@ -872,9 +824,7 @@ TEST_F(TestMockImageCloneRequest, MirrorEnableError) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, 0);
+  expect_set_parent(mock_image_ctx, 0);
 
   expect_op_features_set(m_ioctx, mock_image_ctx.id, 0);
   expect_child_attach(mock_image_ctx, 0);
@@ -919,9 +869,7 @@ TEST_F(TestMockImageCloneRequest, CloseError) {
   expect_create(mock_create_request, 0);
 
   expect_open(mock_image_ctx, 0);
-
-  MockAttachParentRequest mock_attach_parent_request;
-  expect_attach_parent(mock_attach_parent_request, 0);
+  expect_set_parent(mock_image_ctx, 0);
 
   expect_op_features_set(m_ioctx, mock_image_ctx.id, 0);
   expect_child_attach(mock_image_ctx, 0);

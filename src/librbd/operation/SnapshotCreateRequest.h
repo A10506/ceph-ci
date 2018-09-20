@@ -86,7 +86,7 @@ private:
 
   uint64_t m_snap_id;
   uint64_t m_size;
-  ParentImageInfo m_parent_info;
+  ParentInfo m_parent_info;
 
   void send_suspend_requests();
   Context *handle_suspend_requests(int *result);

@@ -57,11 +57,8 @@ private:
    *                v                                         v
    *            V2_GET_METADATA                            <apply>
    *                |                                         |
-   *                |     -EOPNOTSUPP                         |
-   *                |  * * *                                  |
-   *                |  *   *                                  |
-   *                v  v   *                                  |
-   *            V2_GET_PARENT                                 |
+   *                v                                         |
+   *            V2_GET_FLAGS                                  |
    *                |                                         |
    *                v (skip if not enabled)                   |
    *            V2_GET_OP_FEATURES                            |
@@ -69,13 +66,16 @@ private:
    *                v                                         |
    *            V2_GET_GROUP                                  |
    *                |                                         |
-   *                |     -EOPNOTSUPP                         |
-   *                |   * * * *                               |
-   *                |   *     *                               |
-   *                v   v     *                               |
-   *            V2_GET_SNAPSHOTS (skip if no snaps)           |
-   *                |                                         |
    *                v                                         |
+   *            V2_GET_SNAPSHOTS (skip if no snaps)           |
+   *                |       .                                 |
+   *                |       v (pre-mimic OSD)                 |
+   *                |   V2_GET_SNAPSHOTS_LEGACY               |
+   *                |       |                                 |
+   *                |       v                                 |
+   *                |   V2_GET_SNAP_TIMESTAMPS                |
+   *                |       |                                 |
+   *                v       v                                 |
    *            V2_REFRESH_PARENT (skip if no parent or       |
    *                |              refresh not needed)        |
    *                v                                         |
@@ -132,9 +132,6 @@ private:
 
   bufferlist m_out_bl;
 
-  bool m_legacy_parent = false;
-  bool m_legacy_snapshot = false;
-
   uint8_t m_order = 0;
   uint64_t m_size = 0;
   uint64_t m_features = 0;
@@ -146,13 +143,12 @@ private:
   std::map<std::string, bufferlist> m_metadata;
 
   std::string m_object_prefix;
-  ParentImageInfo m_parent_md;
-  bool m_head_parent_overlap = false;
+  ParentInfo m_parent_md;
   cls::rbd::GroupSpec m_group_spec;
 
   ::SnapContext m_snapc;
   std::vector<cls::rbd::SnapshotInfo> m_snap_infos;
-  std::vector<ParentImageInfo> m_snap_parents;
+  std::vector<ParentInfo> m_snap_parents;
   std::vector<uint8_t> m_snap_protection;
   std::vector<uint64_t> m_snap_flags;
 
@@ -182,11 +178,11 @@ private:
   void send_v2_get_mutable_metadata();
   Context *handle_v2_get_mutable_metadata(int *result);
 
-  void send_v2_get_parent();
-  Context *handle_v2_get_parent(int *result);
-
   void send_v2_get_metadata();
   Context *handle_v2_get_metadata(int *result);
+
+  void send_v2_get_flags();
+  Context *handle_v2_get_flags(int *result);
 
   void send_v2_get_op_features();
   Context *handle_v2_get_op_features(int *result);
@@ -199,6 +195,9 @@ private:
 
   void send_v2_get_snapshots_legacy();
   Context *handle_v2_get_snapshots_legacy(int *result);
+
+  void send_v2_get_snap_timestamps();
+  Context *handle_v2_get_snap_timestamps(int *result);
 
   void send_v2_refresh_parent();
   Context *handle_v2_refresh_parent(int *result);
@@ -242,10 +241,9 @@ private:
   }
 
   void apply();
-  int get_parent_info(uint64_t snap_id, ParentImageInfo *parent_md,
+  int get_parent_info(uint64_t snap_id, ParentInfo *parent_md,
                       MigrationInfo *migration_info);
-  bool get_migration_info(ParentImageInfo *parent_md,
-                          MigrationInfo *migration_info);
+  bool get_migration_info(ParentInfo *parent_md, MigrationInfo *migration_info);
 };
 
 } // namespace image

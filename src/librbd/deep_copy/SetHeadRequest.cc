@@ -7,8 +7,6 @@
 #include "cls/rbd/cls_rbd_types.h"
 #include "librbd/ExclusiveLock.h"
 #include "librbd/Utils.h"
-#include "librbd/image/AttachParentRequest.h"
-#include "librbd/image/DetachParentRequest.h"
 
 #define dout_subsys ceph_subsys_rbd
 #undef dout_prefix
@@ -23,7 +21,7 @@ using librbd::util::create_rados_callback;
 
 template <typename I>
 SetHeadRequest<I>::SetHeadRequest(I *image_ctx, uint64_t size,
-                                  const cls::rbd::ParentImageSpec &spec,
+                                  const librbd::ParentSpec &spec,
                                   uint64_t parent_overlap,
                                   Context *on_finish)
   : m_image_ctx(image_ctx), m_size(size), m_parent_spec(spec),
@@ -42,7 +40,7 @@ void SetHeadRequest<I>::send_set_size() {
   m_image_ctx->snap_lock.get_read();
   if (m_image_ctx->size == m_size) {
     m_image_ctx->snap_lock.put_read();
-    send_detach_parent();
+    send_remove_parent();
     return;
   }
   m_image_ctx->snap_lock.put_read();
@@ -97,22 +95,26 @@ void SetHeadRequest<I>::handle_set_size(int r) {
     m_image_ctx->size = m_size;
   }
 
-  send_detach_parent();
+  send_remove_parent();
 }
 
 template <typename I>
-void SetHeadRequest<I>::send_detach_parent() {
+void SetHeadRequest<I>::send_remove_parent() {
   m_image_ctx->parent_lock.get_read();
   if (m_image_ctx->parent_md.spec.pool_id == -1 ||
       (m_image_ctx->parent_md.spec == m_parent_spec &&
        m_image_ctx->parent_md.overlap == m_parent_overlap)) {
     m_image_ctx->parent_lock.put_read();
-    send_attach_parent();
+    send_set_parent();
     return;
   }
   m_image_ctx->parent_lock.put_read();
 
   ldout(m_cct, 20) << dendl;
+
+  librados::ObjectWriteOperation op;
+  librbd::cls_client::remove_parent(&op);
+
   auto finish_op_ctx = start_lock_op();
   if (finish_op_ctx == nullptr) {
     lderr(m_cct) << "lost exclusive lock" << dendl;
@@ -121,15 +123,17 @@ void SetHeadRequest<I>::send_detach_parent() {
   }
 
   auto ctx = new FunctionContext([this, finish_op_ctx](int r) {
-      handle_detach_parent(r);
+      handle_remove_parent(r);
       finish_op_ctx->complete(0);
     });
-  auto req = image::DetachParentRequest<I>::create(*m_image_ctx, ctx);
-  req->send();
+  librados::AioCompletion *comp = create_rados_callback(ctx);
+  int r = m_image_ctx->md_ctx.aio_operate(m_image_ctx->header_oid, comp, &op);
+  ceph_assert(r == 0);
+  comp->release();
 }
 
 template <typename I>
-void SetHeadRequest<I>::handle_detach_parent(int r) {
+void SetHeadRequest<I>::handle_remove_parent(int r) {
   ldout(m_cct, 20) << "r=" << r << dendl;
 
   if (r < 0) {
@@ -145,11 +149,11 @@ void SetHeadRequest<I>::handle_detach_parent(int r) {
     m_image_ctx->parent_md.overlap = 0;
   }
 
-  send_attach_parent();
+  send_set_parent();
 }
 
 template <typename I>
-void SetHeadRequest<I>::send_attach_parent() {
+void SetHeadRequest<I>::send_set_parent() {
   m_image_ctx->parent_lock.get_read();
   if (m_image_ctx->parent_md.spec == m_parent_spec &&
       m_image_ctx->parent_md.overlap == m_parent_overlap) {
@@ -160,6 +164,10 @@ void SetHeadRequest<I>::send_attach_parent() {
   m_image_ctx->parent_lock.put_read();
 
   ldout(m_cct, 20) << dendl;
+
+  librados::ObjectWriteOperation op;
+  librbd::cls_client::set_parent(&op, m_parent_spec, m_parent_overlap);
+
   auto finish_op_ctx = start_lock_op();
   if (finish_op_ctx == nullptr) {
     lderr(m_cct) << "lost exclusive lock" << dendl;
@@ -168,20 +176,21 @@ void SetHeadRequest<I>::send_attach_parent() {
   }
 
   auto ctx = new FunctionContext([this, finish_op_ctx](int r) {
-      handle_attach_parent(r);
+      handle_set_parent(r);
       finish_op_ctx->complete(0);
     });
-  auto req = image::AttachParentRequest<I>::create(
-    *m_image_ctx, m_parent_spec, m_parent_overlap, ctx);
-  req->send();
+  librados::AioCompletion *comp = create_rados_callback(ctx);
+  int r = m_image_ctx->md_ctx.aio_operate(m_image_ctx->header_oid, comp, &op);
+  ceph_assert(r == 0);
+  comp->release();
 }
 
 template <typename I>
-void SetHeadRequest<I>::handle_attach_parent(int r) {
+void SetHeadRequest<I>::handle_set_parent(int r) {
   ldout(m_cct, 20) << "r=" << r << dendl;
 
   if (r < 0) {
-    lderr(m_cct) << "failed to attach parent: " << cpp_strerror(r) << dendl;
+    lderr(m_cct) << "failed to set parent: " << cpp_strerror(r) << dendl;
     finish(r);
     return;
   }
