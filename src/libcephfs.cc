@@ -1393,7 +1393,7 @@ extern "C" int ceph_ll_lookup_inode(
     struct inodeno_t ino,
     Inode **inode)
 {
-  return (cmount->get_client())->ll_lookup_inode(ino, cmount->default_perms, inode);
+  return (cmount->get_client())->ll_lookup_inode2(ino, cmount->default_perms, inode);
 }
 
 extern "C" int ceph_ll_lookup(struct ceph_mount_info *cmount,

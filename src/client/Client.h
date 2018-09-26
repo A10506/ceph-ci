@@ -1148,6 +1148,7 @@ public:
   int ll_lookup(Inode *parent, const char *name, struct stat *attr,
 		Inode **out, const UserPerm& perms);
   int ll_lookup_inode(struct inodeno_t ino, const UserPerm& perms, Inode **inode);
+  int ll_lookup_inode2(struct inodeno_t ino, const UserPerm& perms, Inode **inode);
   int ll_lookupx(Inode *parent, const char *name, Inode **out,
 			struct ceph_statx *stx, unsigned want, unsigned flags,
 			const UserPerm& perms);

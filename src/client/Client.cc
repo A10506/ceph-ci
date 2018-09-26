@@ -10406,6 +10406,97 @@ int Client::ll_lookup_inode(
   return 0;
 }
 
+int Client::ll_lookup_inode2(
+    struct inodeno_t ino,
+    const UserPerm& perms,
+    Inode **inode)
+{
+    Mutex::Locker lock(client_lock);
+    if (unmounting)
+       return -ENOTCONN;
+
+    // Num1: get inode and *inode
+    MetaRequest *req_inode = new MetaRequest(CEPH_MDS_OP_LOOKUPINO);
+    filepath path_inode(ino);
+    req_inode->set_filepath(path_inode);
+
+    int r_inode = make_request(req_inode, perms, NULL, NULL, rand() % mdsmap->get_num_in_mds());
+    if (r_inode == 0 && inode != NULL) {
+        vinodeno_t vino(ino, CEPH_NOSNAP);
+        unordered_map<vinodeno_t,Inode*>::iterator p = inode_map.find(vino);
+        assert(p != inode_map.end());
+        *inode = p->second;
+        _ll_get(*inode);
+    }
+    else {
+        return r_inode;
+    }
+    ldout(cct, 3) << "lookup_ino exit(" << ino << ") = " << r_inode << dendl;
+    assert(inode != NULL);
+    assert(*inode != NULL);
+    Inode *inode_pr = *inode;
+
+    // Num2: Request the parent inode, so that we can look up the name
+    Inode *parent;
+    if (!inode_pr->dn_set.empty()) {
+        // if we exposed the parent here, we'd need to check permissions,
+        // but right now we just rely on the MDS doing so in make_request
+        ldout(cct, 3) << "lookup_parent dentry already present" << dendl;
+        return 0;
+    }
+    if (inode_pr->is_root()) {
+        parent = NULL;
+        ldout(cct, 3) << "ino is root, no parent" << dendl;
+		return -EINVAL;
+    }
+    MetaRequest *req_parent = new MetaRequest(CEPH_MDS_OP_LOOKUPPARENT);
+    filepath path_parent(inode_pr->ino);
+    req_parent->set_filepath(path_parent);
+        InodeRef target;
+    int r_parent = make_request(req_parent, perms, &target, NULL, rand() % mdsmap->get_num_in_mds());
+    // Give caller a reference to the parent ino if they provided a pointer.
+    if (&parent != NULL) {
+      if (r_parent == 0) {
+      parent = target.get();
+      _ll_get(parent);
+      ldout(cct, 3) << "lookup_parent found parent " << parent->ino << dendl;
+      } else {
+        parent = NULL;
+      }
+    }
+    ldout(cct, 3) << "lookup_parent exit(" << inode_pr->ino << ") = " << r_parent << dendl;
+    if (r_parent && r_parent != -EINVAL) {
+      // Unexpected error
+      _ll_forget(inode_pr, 1);
+      return r_parent;
+    } else if (r_parent == -EINVAL) {
+      // EINVAL indicates node without parents (root), drop out now
+      // and don't try to look up the non-existent dentry.
+      return 0;
+    }
+    assert(parent != NULL);
+
+    // Num3: Finally, get the name (dentry) of the requested inode
+    assert(parent->is_dir());
+    ldout(cct, 3) << "lookup_name enter(" << inode_pr->ino << ")" << dendl;
+    MetaRequest *req_name = new MetaRequest(CEPH_MDS_OP_LOOKUPNAME);
+    req_name->set_filepath2(filepath(parent->ino));
+    req_name->set_filepath(filepath(inode_pr->ino));
+    req_name->set_inode(inode_pr);
+    int r_lookup = make_request(req_name, perms, NULL, NULL, rand() % mdsmap->get_num_in_mds());
+    ldout(cct, 3) << "lookup_name exit(" << inode_pr->ino << ") = " << r_lookup << dendl;
+    if (r_lookup) {
+      // Unexpected error
+      _ll_forget(parent, 1);
+      _ll_forget(inode_pr, 1);
+      return r_lookup;
+    }
+
+    // Num4: forget
+    _ll_forget(parent, 1);
+    return 0;
+}
+
 int Client::ll_lookupx(Inode *parent, const char *name, Inode **out,
 		       struct ceph_statx *stx, unsigned want, unsigned flags,
 		       const UserPerm& perms)
