@@ -574,6 +574,10 @@ flushjournal_out:
   global_init_daemonize(g_ceph_context);
   common_init_finish(g_ceph_context);
 
+   // install signal handlers
+  init_async_signal_handler();
+  register_async_signal_handler(SIGHUP, sighup_handler);
+
   TracepointProvider::initialize<osd_tracepoint_traits>(g_ceph_context);
   TracepointProvider::initialize<os_tracepoint_traits>(g_ceph_context);
 #ifdef WITH_OSD_INSTRUMENT_FUNCTIONS
@@ -627,9 +631,6 @@ flushjournal_out:
     return 1;
   }
 
-  // install signal handlers
-  init_async_signal_handler();
-  register_async_signal_handler(SIGHUP, sighup_handler);
   register_async_signal_handler_oneshot(SIGINT, handle_osd_signal);
   register_async_signal_handler_oneshot(SIGTERM, handle_osd_signal);
 
