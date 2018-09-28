@@ -214,6 +214,7 @@ struct MockImageCtx {
                                     uint64_t, Context *, int, uint64_t, ZTracer::Trace *));
   MOCK_METHOD2(apply_metadata, int(const std::map<std::string, bufferlist> &,
                                    bool));
+  MOCK_METHOD0(set_qos_quota, int());
 
   MOCK_CONST_METHOD0(get_stripe_count, uint64_t());
   MOCK_CONST_METHOD0(get_stripe_period, uint64_t());
@@ -320,6 +321,7 @@ struct MockImageCtx {
   bool non_blocking_aio;
   bool blkin_trace_all;
   bool enable_alloc_hint;
+  bool qos_enabled;
 };
 
 } // namespace librbd

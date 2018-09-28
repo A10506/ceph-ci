@@ -565,6 +565,10 @@ PerfCounters *PrimaryLogPG::get_logger()
   return osd->logger;
 }
 
+op_stat_t *PrimaryLogPG::get_op_stat()
+{
+  return &inc_op_stats;
+}
 
 // ====================
 // missing objects
@@ -1524,6 +1528,7 @@ void PrimaryLogPG::do_pg_op(OpRequestRef op)
   reply->claim_op_out_data(ops);
   reply->set_result(result);
   reply->set_reply_versions(info.last_update, info.last_user_version);
+  reply->set_dmc_op_tracker(op->get_dmc_op_tracker());
   osd->send_message_osd_client(reply, m->get_connection());
   delete filter;
 }
@@ -2442,6 +2447,7 @@ void PrimaryLogPG::record_write_error(OpRequestRef op, const hobject_t &soid,
 				flags, true);
       }
       ldpp_dout(pg, 10) << " sending commit on " << *m << " " << reply << dendl;
+      reply->set_dmc_op_tracker(op->get_dmc_op_tracker());
       pg->osd->send_message_osd_client(reply, m->get_connection());
     }
   };
@@ -2741,6 +2747,7 @@ void PrimaryLogPG::do_cache_redirect(OpRequestRef op)
   reply->set_redirect(redir);
   dout(10) << "sending redirect to pool " << pool.info.tier_of << " for op "
 	   << op << dendl;
+  reply->set_dmc_op_tracker(op->get_dmc_op_tracker());
   m->get_connection()->send_message(reply);
   return;
 }
@@ -3082,6 +3089,7 @@ void PrimaryLogPG::finish_proxy_write(hobject_t oid, ceph_tid_t tid, int r)
       reply->set_reply_versions(eversion_t(), pwop->user_version);
     }
     reply->add_flags(CEPH_OSD_FLAG_ACK | CEPH_OSD_FLAG_ONDISK);
+    reply->set_dmc_op_tracker(pwop->op->get_dmc_op_tracker());
     dout(10) << " sending commit on " << pwop << " " << reply << dendl;
     osd->send_message_osd_client(reply, m->get_connection());
     pwop->sent_reply = true;
@@ -3379,6 +3387,7 @@ void PrimaryLogPG::execute_ctx(OpContext *ctx)
 				    ctx->user_at_version);
 	}
 	reply->add_flags(CEPH_OSD_FLAG_ACK | CEPH_OSD_FLAG_ONDISK);
+	reply->set_dmc_op_tracker(ctx->op->get_dmc_op_tracker());
 	dout(10) << " sending reply on " << *m << " " << reply << dendl;
 	osd->send_message_osd_client(reply, m->get_connection());
 	ctx->sent_reply = true;
@@ -3462,18 +3471,39 @@ void PrimaryLogPG::log_op_stats(OpContext *ctx)
     osd->logger->hinc(l_osd_op_rw_lat_inb_hist, latency.to_nsec(), inb);
     osd->logger->hinc(l_osd_op_rw_lat_outb_hist, latency.to_nsec(), outb);
     osd->logger->tinc(l_osd_op_rw_process_lat, process_latency);
+    inc_op_stats.rd_num++;
+    inc_op_stats.rd_bytes += outb;
+    inc_op_stats.rd_latency += latency.to_nsec();
+    inc_op_stats.wr_num++;
+    inc_op_stats.wr_bytes += inb;
+    inc_op_stats.wr_latency += latency.to_nsec();
+    inc_op_stats.op_num++;
+    inc_op_stats.op_bytes += (inb + outb);
+    inc_op_stats.op_latency += latency.to_nsec();
   } else if (op->may_read()) {
     osd->logger->inc(l_osd_op_r);
     osd->logger->inc(l_osd_op_r_outb, outb);
     osd->logger->tinc(l_osd_op_r_lat, latency);
     osd->logger->hinc(l_osd_op_r_lat_outb_hist, latency.to_nsec(), outb);
     osd->logger->tinc(l_osd_op_r_process_lat, process_latency);
+    inc_op_stats.rd_num++;
+    inc_op_stats.rd_bytes += outb;
+    inc_op_stats.rd_latency += latency.to_nsec();
+    inc_op_stats.op_num++;
+    inc_op_stats.op_bytes += outb;
+    inc_op_stats.op_latency += latency.to_nsec();
   } else if (op->may_write() || op->may_cache()) {
     osd->logger->inc(l_osd_op_w);
     osd->logger->inc(l_osd_op_w_inb, inb);
     osd->logger->tinc(l_osd_op_w_lat, latency);
     osd->logger->hinc(l_osd_op_w_lat_inb_hist, latency.to_nsec(), inb);
     osd->logger->tinc(l_osd_op_w_process_lat, process_latency);
+    inc_op_stats.wr_num++;
+    inc_op_stats.wr_bytes += inb;
+    inc_op_stats.wr_latency += latency.to_nsec();
+    inc_op_stats.op_num++;
+    inc_op_stats.op_bytes += inb;
+    inc_op_stats.op_latency += latency.to_nsec();
   } else
     ceph_abort();
 
@@ -7801,6 +7831,7 @@ void PrimaryLogPG::complete_read_ctx(int result, OpContext *ctx)
 
   reply->set_result(result);
   reply->add_flags(CEPH_OSD_FLAG_ACK | CEPH_OSD_FLAG_ONDISK);
+  reply->set_dmc_op_tracker(ctx->op->get_dmc_op_tracker());
   osd->send_message_osd_client(reply, m->get_connection());
   close_op_ctx(ctx);
 }
@@ -8045,6 +8076,7 @@ void PrimaryLogPG::fill_in_copy_get_noent(OpRequestRef& op, hobject_t oid,
   reply->claim_op_out_data(m->ops);
   reply->set_result(-ENOENT);
   reply->add_flags(CEPH_OSD_FLAG_ACK | CEPH_OSD_FLAG_ONDISK);
+  reply->set_dmc_op_tracker(op->get_dmc_op_tracker());
   osd->send_message_osd_client(reply, m->get_connection());
 }
 

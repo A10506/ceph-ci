@@ -90,6 +90,7 @@
 #include "messages/MBackfillReserve.h"
 #include "messages/MRecoveryReserve.h"
 #include "messages/MOSDForceRecovery.h"
+#include "messages/MOSDResetRecoveryLimits.h"
 #include "messages/MOSDECSubOpWrite.h"
 #include "messages/MOSDECSubOpWriteReply.h"
 #include "messages/MOSDECSubOpRead.h"
@@ -263,7 +264,6 @@ OSDService::OSDService(OSD *osd) :
   recovery_lock("OSDService::recovery_lock"),
   recovery_ops_active(0),
   recovery_ops_reserved(0),
-  recovery_paused(false),
   map_cache_lock("OSDService::map_cache_lock"),
   map_cache(cct, cct->_conf->osd_map_cache_size),
   map_bl_cache(cct->_conf->osd_map_cache_size),
@@ -1639,6 +1639,7 @@ void OSDService::reply_op_error(OpRequestRef op, int err, eversion_t v,
   MOSDOpReply *reply = new MOSDOpReply(m, err, osdmap->get_epoch(), flags,
 				       true);
   reply->set_reply_versions(v, uv);
+  reply->set_dmc_op_tracker(op->get_dmc_op_tracker());
   m->get_connection()->send_message(reply);
 }
 
@@ -1989,6 +1990,7 @@ OSD::OSD(CephContext *cct_, ObjectStore *store_,
   op_tracker(cct, cct->_conf->osd_enable_op_tracker,
                   cct->_conf->osd_num_op_tracker_shard),
   test_ops_hook(NULL),
+  load_balancer(this),
   op_queue(get_io_queue()),
   op_prio_cutoff(get_io_prio_cut()),
   op_shardedwq(
@@ -2158,6 +2160,13 @@ will start to track new ops received afterwards.";
   } else if (admin_command == "dump_op_pq_state") {
     f->open_object_section("pq");
     op_shardedwq.dump(f);
+    f->close_section();
+  } else if (admin_command == "dump_recovery_rate") {
+    f->open_object_section("recovery rate");
+    opwq_tracker.dump(f);
+    f->close_section();
+    f->open_object_section("load_balancer");
+    load_balancer.dump(f);
     f->close_section();
   } else if (admin_command == "dump_blacklist") {
     list<pair<entity_addr_t,utime_t> > bl;
@@ -2649,6 +2658,9 @@ int OSD::init()
 	  const auto lec = pg->pg_stats_publish.get_effective_last_epoch_clean();
 	  min_last_epoch_clean = min(min_last_epoch_clean, lec);
 	  min_last_epoch_clean_pgs.push_back(pg->info.pgid.pgid);
+
+          m->op_stat[pg->info.pgid.pgid] = pg->inc_op_stats;
+          pg->inc_op_stats.clear();
         }
         pg->pg_stats_publish_lock.Unlock();
       }
@@ -2819,6 +2831,10 @@ void OSD::final_init()
 				     asok_hook,
 				     "dump op priority queue state");
   assert(r == 0);
+  r = admin_socket->register_command("dump_recovery_rate", "dump_recovery_rate",
+				     asok_hook,
+				     "dump backend recovery qos rate");
+  assert(r == 0);
   r = admin_socket->register_command("dump_blacklist", "dump_blacklist",
 				     asok_hook,
 				     "dump blacklisted clients and times");
@@ -2970,7 +2986,13 @@ void OSD::final_init()
     "set_recovery_delay " \
     "name=utime,type=CephInt,req=false",
     test_ops_hook,
-     "Delay osd recovery by specified seconds");
+    "Delay osd recovery by specified seconds");
+  assert(r == 0);
+  r = admin_socket->register_command(
+    "unpause_recovery",
+    "unpause_recovery",
+    test_ops_hook,
+    "Aggressively unpause recovery");
   assert(r == 0);
   r = admin_socket->register_command(
    "trigger_scrub",
@@ -3136,7 +3158,8 @@ void OSD::create_logger()
     l_osd_sop_push_lat, "subop_push_latency", "Suboperations push latency");
 
   osd_plb.add_u64_counter(l_osd_pull, "pull", "Pull requests sent");
-  osd_plb.add_u64_counter(l_osd_push, "push", "Push messages sent");
+  osd_plb.add_u64_counter(l_osd_push_tx, "push_tx", "Push messages sent");
+  osd_plb.add_u64_counter(l_osd_push_rx, "push_rx", "Push messages received (including pull responses)");
   osd_plb.add_u64_counter(l_osd_push_outb, "push_out_bytes", "Pushed size", NULL, 0, unit_t(BYTES));
 
   osd_plb.add_u64_counter(
@@ -3374,6 +3397,7 @@ int OSD::shutdown()
   cct->get_admin_socket()->unregister_command("dump_historic_ops_by_duration");
   cct->get_admin_socket()->unregister_command("dump_historic_slow_ops");
   cct->get_admin_socket()->unregister_command("dump_op_pq_state");
+  cct->get_admin_socket()->unregister_command("dump_recovery_rate");
   cct->get_admin_socket()->unregister_command("dump_blacklist");
   cct->get_admin_socket()->unregister_command("dump_watchers");
   cct->get_admin_socket()->unregister_command("dump_reservations");
@@ -3398,6 +3422,7 @@ int OSD::shutdown()
   cct->get_admin_socket()->unregister_command("injectdataerr");
   cct->get_admin_socket()->unregister_command("injectmdataerr");
   cct->get_admin_socket()->unregister_command("set_recovery_delay");
+  cct->get_admin_socket()->unregister_command("unpause_recovery");
   cct->get_admin_socket()->unregister_command("trigger_scrub");
   cct->get_admin_socket()->unregister_command("injectfull");
   delete test_ops_hook;
@@ -5322,6 +5347,8 @@ void OSD::tick_without_osd_lock()
   assert(tick_timer_lock.is_locked());
   dout(10) << "tick_without_osd_lock" << dendl;
 
+  load_balancer.sample();
+
   logger->set(l_osd_buf, buffer::get_total_alloc());
   logger->set(l_osd_history_alloc_bytes, SHIFT_ROUND_UP(buffer::get_history_alloc_bytes(), 20));
   logger->set(l_osd_history_alloc_num, buffer::get_history_alloc_num());
@@ -5592,6 +5619,16 @@ void TestOpsSocketHook::test_ops(OSDService *service, ObjectStore *store,
     service->cct->_conf->apply_changes(NULL);
     ss << "set_recovery_delay: set osd_recovery_delay_start "
        << "to " << service->cct->_conf->osd_recovery_delay_start;
+    return;
+  }
+  if (command == "unpause_recovery") {
+    if (!service->recovery_is_paused()) {
+      ss << "recovery already unpaused";
+      return;
+    }
+    service->unpause_recovery();      // admin
+    service->unpause_recovery(false); // load balancer (if any)
+    ss << "done unpausing recovery";
     return;
   }
   if (command ==  "trigger_scrub") {
@@ -7402,6 +7439,10 @@ void OSD::_dispatch(Message *m)
     handle_force_recovery(m);
     break;
 
+  case MSG_OSD_RESET_RECOVERY_LIMITS:
+    handle_reset_recovery_limits(m);
+    break;
+
     // -- need OSDMap --
 
   case MSG_OSD_PG_CREATE:
@@ -8530,15 +8571,11 @@ void OSD::activate_map()
 
   // norecover?
   if (osdmap->test_flag(CEPH_OSDMAP_NORECOVER)) {
-    if (!service.recovery_is_paused()) {
-      dout(1) << "pausing recovery (NORECOVER flag set)" << dendl;
-      service.pause_recovery();
-    }
+    dout(1) << "pausing recovery (NORECOVER flag set)" << dendl;
+    service.pause_recovery();
   } else {
-    if (service.recovery_is_paused()) {
-      dout(1) << "unpausing recovery (NORECOVER flag unset)" << dendl;
-      service.unpause_recovery();
-    }
+    dout(1) << "unpausing recovery (NORECOVER flag unset)" << dendl;
+    service.unpause_recovery();
   }
 
   service.activate_map();
@@ -9295,6 +9332,79 @@ void OSD::handle_force_recovery(Message *m)
   msg->put();
 }
 
+void OSD::handle_reset_recovery_limits(Message *m)
+{
+  MOSDResetRecoveryLimits *msg = static_cast<MOSDResetRecoveryLimits*>(m);
+  assert(msg->get_type() == MSG_OSD_RESET_RECOVERY_LIMITS);
+  dout(10) << __func__ << " " << *msg << dendl;
+
+  int r;
+  stringstream rs;
+  string args;
+  auto conf = cct->_conf;
+  if (msg->options & OSD_RESET_RECOVERY_BANDWIDTH) {
+    auto spec = conf->get_val<string>("osd_dmc_queue_spec_pullpush");
+    auto found = spec.find_last_of(',');
+    assert(found != std::string::npos);
+    auto bandwidth = spec.substr(found + 1);
+    auto others = spec.substr(0, found);
+    double default_value;
+    char unit = 0;
+    r = sscanf(bandwidth.c_str(), "%lf%c", &default_value, &unit);
+    if (r != 1 && r != 2) {
+      derr << __func__ << " unable to parse bandwidth:" << bandwidth << dendl;
+      goto out;
+    }
+    auto baseline = default_value * msg->bandwidth_factor;
+    auto aggressive = default_value * msg->aggressive_factor;
+    stringstream ss;
+    if (load_balancer.can_promote_recovery() &&
+        baseline > default_value &&
+        aggressive > baseline) {
+      dout(0) << __func__ << " aggressively promote bandwidth to "
+              << aggressive << unit << dendl;
+      ss << aggressive;
+    } else {
+      ss << baseline;
+    }
+    if (unit != 0) {
+      assert(isalpha(unit));
+      ss << unit;
+    }
+    string new_spec = others + "," + ss.str();
+    args = "--osd_load_balancer_spec_default=" + new_spec;
+  }
+  if (msg->options & OSD_RESET_RECOVERY_MAXACTIVE) {
+    auto default_value = conf->get_val<uint64_t>(
+      "osd_recovery_max_active_baseline");
+    uint64_t baseline = ceil(default_value * msg->maxactive_factor);
+    uint64_t aggressive = ceil(default_value * msg->aggressive_factor);
+    stringstream ss;
+    if (load_balancer.can_promote_recovery() &&
+        baseline > default_value &&
+        aggressive > baseline) {
+      dout(0) << __func__ << " aggressively promote osd_recovery_max_active"
+              << " to " << aggressive << dendl;
+      ss << aggressive;
+    } else {
+      ss << baseline;
+    }
+    if (args.length()) {
+      args += " ";
+    }
+    args += "--osd_recovery_max_active=" + ss.str();
+  }
+  osd_lock.Unlock();
+  dout(0) << __func__ << " do injectargs '" << args << "'" << dendl;
+  r = conf->injectargs(args, &rs);
+  osd_lock.Lock();
+  if (r < 0) {
+    derr << __func__ << " injectargs failed:" << rs.str() << dendl;
+  }
+ out:
+  msg->put();
+}
+
 /** PGQuery
  * from primary to replica | stray
  * NOTE: called with opqueue active.
@@ -9528,7 +9638,7 @@ bool OSDService::_recover_now(uint64_t *available_pushes)
     return false;
   }
 
-  if (recovery_paused) {
+  if (recovery_is_paused(false)) { // drop recovery_lock
     dout(15) << __func__ << " paused" << dendl;
     return false;
   }
@@ -9779,6 +9889,17 @@ void OSD::enqueue_op(spg_t pg, OpRequestRef& op, epoch_t epoch)
   op->osd_trace.keyval("priority", op->get_req()->get_priority());
   op->osd_trace.keyval("cost", op->get_req()->get_cost());
   op->mark_queued_for_pg();
+
+  if (cct->_conf->osd_dmc_queue_enable_pullpush) {
+    if (op->get_req()->get_type() == MSG_OSD_PG_PULL ||
+        op->get_req()->get_type() == MSG_OSD_PG_PUSH) {
+      int shard = pg.hash_to_shard(get_num_op_shards());
+      int srvid = crimson::dmclock::gen_server_id(whoami, shard);
+      dmc_op_tracker opt = get_dmc_op_tracker(srvid);
+      opt.add_cost(op->get_req()->get_cost());
+      op->set_dmc_op_tracker(opt);
+    }
+  }
   logger->tinc(l_osd_op_before_queue_op_lat, latency);
   op_shardedwq.queue(make_pair(pg, PGQueueable(op, epoch)));
 }
@@ -9813,6 +9934,15 @@ void OSD::dequeue_op(
     session->put();
   }
 
+  if (cct->_conf->osd_dmc_queue_enable_pullpush) {
+    if (op->get_req()->get_type() == MSG_OSD_PG_PUSH ||
+        op->get_req()->get_type() == MSG_OSD_PG_PULL) {
+      int shard = pg->info.pgid.hash_to_shard(get_num_op_shards());
+      int srvid = crimson::dmclock::gen_server_id(whoami, shard);
+      update_opwq_tracker(op, srvid);
+    }
+  }
+
   if (pg->deleting)
     return;
 
@@ -9824,6 +9954,26 @@ void OSD::dequeue_op(
   // finish
   dout(10) << "dequeue_op " << op << " finish" << dendl;
   OID_EVENT_TRACE_WITH_MSG(op->get_req(), "DEQUEUE_OP_END", false);
+}
+
+void OSD::update_opwq_tracker(OpRequestRef& op, ServerId& srv)
+{
+  dmc_op_tracker opt = op->get_dmc_op_tracker();
+  switch (opt.phase) {
+  case DMC_OP_PHASE_RESERVATION:
+    opwq_tracker.track_resp(srv,
+      crimson::dmclock::PhaseType::reservation, opt.cost);
+    break;
+  case DMC_OP_PHASE_PRIORITY:
+    opwq_tracker.track_resp(srv,
+      crimson::dmclock::PhaseType::priority, opt.cost);
+    break;
+  }
+}
+
+dmc_op_tracker OSD::get_dmc_op_tracker(ServerId& srv) {
+  auto rp = opwq_tracker.get_req_params(srv);
+  return dmc_op_tracker(rp.delta, rp.rho, rp.cost);
 }
 
 
@@ -9944,6 +10094,20 @@ const char** OSD::get_tracked_conf_keys() const
     "osd_client_message_cap",
     "osd_heartbeat_min_size",
     "osd_heartbeat_interval",
+    "osd_dmc_queue_spec_clientop",
+    "osd_dmc_queue_spec_subop",
+    "osd_dmc_queue_spec_pullpush",
+    "osd_dmc_queue_spec_snaptrim",
+    "osd_dmc_queue_spec_recovery",
+    "osd_dmc_queue_spec_scrub",
+    // load balancer
+    "osd_load_balancer_enabled",
+    "osd_load_balancer_op_priority_mode",
+    "osd_load_balancer_client_op_white_noise_filter",
+    "osd_load_balancer_recovery_op_white_noise_filter",
+    "osd_load_balancer_idle_interval",
+    "osd_load_balancer_spec_default",
+    "osd_load_balancer_spec_unlimited",
     NULL
   };
   return KEYS;
@@ -10030,6 +10194,17 @@ void OSD::handle_conf_change(const struct md_config_t *conf,
     }
   }
 
+  if (changed.count("osd_load_balancer_enabled") ||
+      changed.count("osd_load_balancer_op_priority_mode") ||
+      changed.count("osd_load_balancer_client_op_white_noise_filter") ||
+      changed.count("osd_load_balancer_recovery_op_white_noise_filter") ||
+      changed.count("osd_load_balancer_idle_interval") ||
+      changed.count("osd_load_balancer_spec_default") ||
+      changed.count("osd_load_balancer_spec_unlimited")) {
+    load_balancer.maybe_update_config();
+  }
+
+  maybe_update_queue_config(conf, changed);
   check_config();
 }
 
@@ -10068,6 +10243,34 @@ void OSD::check_config()
     clog->warn() << "osd_map_cache_size (" << cct->_conf->osd_map_cache_size << ")"
 		 << " is not > osd_pg_epoch_persisted_max_stale ("
 		 << cct->_conf->osd_pg_epoch_persisted_max_stale << ")";
+  }
+}
+
+void OSD::maybe_update_queue_config(const struct md_config_t *conf,
+                                    const std::set <std::string> &changed) {
+  if (changed.count("osd_dmc_queue_spec_clientop")) {
+    op_shardedwq.update_queue_config("osd_dmc_queue_spec_clientop",
+      conf->osd_dmc_queue_spec_clientop);
+  }
+  if (changed.count("osd_dmc_queue_spec_subop")) {
+    op_shardedwq.update_queue_config("osd_dmc_queue_spec_subop",
+      conf->osd_dmc_queue_spec_subop);
+  }
+  if (changed.count("osd_dmc_queue_spec_pullpush")) {
+    op_shardedwq.update_queue_config("osd_dmc_queue_spec_pullpush",
+      conf->osd_dmc_queue_spec_pullpush);
+  }
+  if (changed.count("osd_dmc_queue_spec_snaptrim")) {
+    op_shardedwq.update_queue_config("osd_dmc_queue_spec_snaptrim",
+      conf->osd_dmc_queue_spec_snaptrim);
+  }
+  if (changed.count("osd_dmc_queue_spec_recovery")) {
+    op_shardedwq.update_queue_config("osd_dmc_queue_spec_recovery",
+      conf->osd_dmc_queue_spec_recovery);
+  }
+  if (changed.count("osd_dmc_queue_spec_scrub")) {
+    op_shardedwq.update_queue_config("osd_dmc_queue_spec_scrub",
+      conf->osd_dmc_queue_spec_scrub);
   }
 }
 
@@ -10442,6 +10645,16 @@ void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb)
     sdata->sdata_op_ordering_lock.Unlock();
     return;    // OSD shutdown, discard.
   }
+  if (!item.second.is_valid()) {
+    dout(10) << __func__ << " ### dequeue null request? "
+             << "pgid: " << item.first << " " << item.second << dendl;
+    sdata->sdata_op_ordering_lock.Unlock();
+    utime_t t;
+    t.set_from_double(osd->cct->_conf->threadpool_dmc_queue_poll_delay);
+    t.sleep();
+    return;
+  }
+  dout(30) << __func__ << " get_cost " << item.second.get_cost() << dendl;
   PGRef pg;
   uint64_t requeue_seq;
   {
@@ -10705,6 +10918,9 @@ std::ostream& operator<<(std::ostream& out, const OSD::io_queue& q) {
     break;
   case OSD::io_queue::mclock_client:
     out << "mclock_client";
+    break;
+  case OSD::io_queue::dmc:
+    out << "dmc";
     break;
   }
   return out;

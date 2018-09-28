@@ -2417,6 +2417,118 @@ bool compare_by_name(const child_info_t& c1, const child_info_t& c2)
     }
   }
 
+  int qos_param_check(int reservation, int weight, int limit, int bandwidth) {
+    if (reservation < 0 && weight < 0 && limit < 0
+        && bandwidth < 0) {
+      return -EINVAL;
+    }
+    if (limit > 0 && reservation > limit) {
+      return -EINVAL;
+    }
+    if (reservation == 0 && weight == 0) {
+      return -EINVAL;
+    }
+    return 0;
+  }
 
+  int rbd_cache_disable(ImageCtx *ictx)
+  {
+    return ictx->operations->metadata_set(RBD_CACHE, "false");
+  }
 
+  int rbd_cache_remove(ImageCtx *ictx)
+  {
+    return ictx->operations->metadata_remove(RBD_CACHE);
+  }
+
+  int qos_spec_set(ImageCtx *ictx,
+                       int rsv, int wgt, int lmt, int bdw)
+  {
+    int r = qos_param_check(rsv, wgt, lmt, bdw);
+    if (r < 0) {
+      return r;
+    }
+    r = ictx->operations->qos_update(rsv, wgt, lmt, bdw);
+    if (r < 0) {
+      return r;
+    }
+
+    return 0;
+  }
+
+  int qos_spec_get(ImageCtx *ictx,
+                       int *rsv, int *wgt, int *lmt, int *bdw,
+                       int *mflag)
+  {
+    string srsv, swgt, slmt, sbdw;
+    if (!rsv && !wgt && !lmt && !bdw) {
+      return -EINVAL;
+    }
+    if (mflag) {
+      *mflag = 0;
+    }
+
+    if (rsv) {
+      if (librbd::metadata_get(ictx, QOS_MRSV, &srsv) < 0) {
+        if (ictx->cct->_conf != NULL) {
+          *rsv = ictx->cct->_conf->rbd_client_qos_reservation;
+        }
+      } else {
+        *rsv = std::stoi(srsv, nullptr);
+        if (mflag) {
+          *mflag |= QOS_FLAG_RSV;
+        }
+      }
+    }
+
+    if (wgt) {
+      if (librbd::metadata_get(ictx, QOS_MWGT, &swgt) < 0) {
+        if (ictx->cct->_conf != NULL) {
+          *wgt = ictx->cct->_conf->rbd_client_qos_weight;
+        }
+      } else {
+        *wgt = std::stoi(swgt, nullptr);
+        if (mflag) {
+          *mflag |= QOS_FLAG_WGT;
+        }
+      }
+    }
+
+    if (lmt) {
+      if (librbd::metadata_get(ictx, QOS_MLMT, &slmt) < 0) {
+        if (ictx->cct->_conf != NULL) {
+          *lmt = ictx->cct->_conf->rbd_client_qos_limit;
+        }
+      } else {
+        *lmt = std::stoi(slmt, nullptr);
+        if (mflag) {
+          *mflag |= QOS_FLAG_LMT;
+        }
+      }
+    }
+
+    if (bdw) {
+      if (librbd::metadata_get(ictx, QOS_MBDW, &sbdw) < 0) {
+        if (ictx->cct->_conf != NULL) {
+          *bdw = ictx->cct->_conf->rbd_client_qos_bandwidth;
+        }
+      } else {
+        *bdw = std::stoi(sbdw, nullptr);
+        if (mflag) {
+          *mflag |= QOS_FLAG_BDW;
+        }
+      }
+    }
+
+    return 0;
+  }
+
+  int qos_spec_del(ImageCtx *ictx, int flag)
+  {
+    int r = ictx->operations->qos_remove(flag);
+    if (r < 0) {
+      return r;
+    }
+    return 0;
+  }
 }

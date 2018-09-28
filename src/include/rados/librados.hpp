@@ -1106,6 +1106,7 @@ namespace librados
         ObjectWriteOperation *op, snap_t seq,
         std::vector<snap_t>& snaps,
         const blkin_trace_info *trace_info);
+
     int aio_operate(const std::string& oid, AioCompletion *c,
 		    ObjectReadOperation *op, bufferlist *pbl);
 
@@ -1234,6 +1235,9 @@ namespace librados
     void locator_set_key(const std::string& key);
     void set_namespace(const std::string& nspace);
 
+    void set_qos_quota(int res, int wgt, int lim, int bdw);
+    uint32_t get_qos_io_rate();
+    uint32_t get_qos_byte_rate();
     int64_t get_id();
 
     // deprecated versions

@@ -105,6 +105,7 @@ public:
   int create_ioctx(int64_t, IoCtxImpl **io);
 
   int get_fsid(std::string *s);
+
   int64_t lookup_pool(const char *name);
   bool pool_requires_alignment(int64_t pool_id);
   int pool_requires_alignment2(int64_t pool_id, bool *requires);

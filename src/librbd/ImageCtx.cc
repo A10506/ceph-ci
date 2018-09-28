@@ -200,7 +200,11 @@ struct C_InvalidateCache : public Context {
       exclusive_lock(nullptr), object_map(nullptr),
       io_work_queue(nullptr), op_work_queue(nullptr),
       asok_hook(nullptr),
-      trace_endpoint("librbd")
+      trace_endpoint("librbd"),
+      client_qos_reservation(cct->_conf->rbd_client_qos_reservation),
+      client_qos_weight(cct->_conf->rbd_client_qos_weight),
+      client_qos_limit(cct->_conf->rbd_client_qos_limit),
+      client_qos_bandwidth(cct->_conf->rbd_client_qos_bandwidth)
   {
     md_ctx.dup(p);
     data_ctx.dup(p);
@@ -231,6 +235,9 @@ struct C_InvalidateCache : public Context {
     assert(journal == NULL);
     assert(asok_hook == NULL);
 
+    if (m_report_timer) {
+      perf_report_stop();
+    }
     if (perfcounter) {
       perf_stop();
     }
@@ -274,6 +281,7 @@ struct C_InvalidateCache : public Context {
 
     trace_endpoint.copy_name(pname);
     perf_start(pname);
+    perf_report_start();
 
     if (cache) {
       Mutex::Locker l(cache_lock);
@@ -418,6 +426,76 @@ struct C_InvalidateCache : public Context {
     assert(perfcounter);
     cct->get_perfcounters_collection()->remove(perfcounter);
     delete perfcounter;
+  }
+
+  void ImageCtx::perf_report_start() {
+    ImageCtx::get_timer_instance(cct, &m_report_timer, &report_timer_lock);
+
+    Mutex::Locker timer_locker(*report_timer_lock);
+    m_report_callback = new FunctionContext([this](int r){ send_report();});
+    m_report_timer->add_event_after(cct->_conf->get_val<double>("rbd_perf_report_interval"),
+                                  m_report_callback);
+  }
+
+  void ImageCtx::perf_report_stop() {
+    Mutex::Locker locker(*report_timer_lock);
+    if (m_report_callback) {
+      m_report_timer->cancel_event(m_report_callback);
+    }
+    m_report_callback = nullptr;
+  }
+
+  void ImageCtx::send_report() {
+    assert(report_timer_lock->is_locked());
+    op_stat_t report;
+
+    bufferlist inbl;
+    librados::Rados rados(md_ctx);
+    string fullid   = std::to_string(md_ctx.get_id()) + "." + id;
+    string fullname = md_ctx.get_pool_name() + "." + name;
+
+    get_report_data(&report);
+    ldout(cct, 20) << " send report..."
+                   << " name: " << fullname
+                   << " id: " << fullid
+                   << ": rd|bytes|lat " << report.rd_num
+                   << "|" << report.rd_bytes
+                   << "|" << report.rd_latency
+                   << ", wr|bytes|lat " << report.wr_num
+                   << "|" << report.wr_bytes
+                   << "|" << report.wr_latency
+                   << dendl;
+
+    report.encode(inbl);
+    rados.mgr_command("{\"prefix\": \"mgr report imgs_perf\","
+                      "\"name\": \"" + fullname + "\""
+                      ", \"id\": \"" + fullid + "\"}", inbl, NULL, NULL);
+
+    m_report_callback = new FunctionContext([this](int r){ send_report();});
+    m_report_timer->add_event_after(cct->_conf->get_val<double>("rbd_perf_report_interval"),
+                                    m_report_callback);
+  }
+
+  void ImageCtx::get_report_data(struct op_stat_t *rpdata) {
+    assert(rpdata);
+
+    op_stat_t cur_stat;
+    op_stat_t pre_stat  = m_perfstat;
+
+    cur_stat.rd_num     = perfcounter->get(l_librbd_rd);
+    cur_stat.rd_bytes   = perfcounter->get(l_librbd_rd_bytes);
+    cur_stat.rd_latency = perfcounter->tget(l_librbd_rd_latency).to_nsec();
+    cur_stat.wr_num     = perfcounter->get(l_librbd_wr);
+    cur_stat.wr_bytes   = perfcounter->get(l_librbd_wr_bytes);
+    cur_stat.wr_latency = perfcounter->tget(l_librbd_wr_latency).to_nsec();
+    cur_stat.op_num     = cur_stat.rd_num + cur_stat.wr_num;
+    cur_stat.op_bytes   = cur_stat.rd_bytes + cur_stat.wr_bytes;
+    cur_stat.op_latency = cur_stat.rd_latency + cur_stat.wr_latency;
+
+    m_perfstat = cur_stat;
+
+    cur_stat.floor_sub(pre_stat);
+    *rpdata = cur_stat;
   }
 
   void ImageCtx::set_read_flag(unsigned flag) {
@@ -1018,7 +1096,11 @@ struct C_InvalidateCache : public Context {
         "rbd_journal_max_concurrent_object_sets", false)(
         "rbd_mirroring_resync_after_disconnect", false)(
         "rbd_mirroring_replay_delay", false)(
-        "rbd_skip_partial_discard", false);
+        "rbd_skip_partial_discard", false)(
+        "rbd_client_qos_reservation", false)(
+        "rbd_client_qos_weight", false)(
+        "rbd_client_qos_limit", false)(
+        "rbd_client_qos_bandwidth", false);
 
     md_config_t local_config_t;
     std::map<std::string, bufferlist> res;
@@ -1087,6 +1169,11 @@ struct C_InvalidateCache : public Context {
     if (sparse_read_threshold_bytes == 0) {
       sparse_read_threshold_bytes = get_object_size();
     }
+    ASSIGN_OPTION(client_qos_reservation, int64_t);
+    ASSIGN_OPTION(client_qos_weight, int64_t);
+    ASSIGN_OPTION(client_qos_limit, int64_t);
+    ASSIGN_OPTION(client_qos_bandwidth, int64_t);
+
   }
 
   ExclusiveLock<ImageCtx> *ImageCtx::create_exclusive_lock() {
@@ -1169,4 +1256,74 @@ struct C_InvalidateCache : public Context {
     *timer = safe_timer_singleton;
     *timer_lock = &safe_timer_singleton->lock;
   }
+
+  int ImageCtx::get_image_perf(int64_t *pio, int64_t *pio_r, int64_t *pio_w,
+                               int64_t *pbdw, int64_t *pbdw_r, int64_t *pbdw_w) {
+    librados::Rados rados(md_ctx);
+    string fullid   = std::to_string(md_ctx.get_id()) + "." + id;
+
+    bufferlist inbl, outbl;
+    int r = rados.mgr_command("{\"prefix\": \"mgr dump imgs_perf\","
+                              "\"dumpcontents\": \"" + fullid + "\"}",
+                              inbl, &outbl, NULL);
+    if (r < 0) {
+      ldout(cct, 0) << __func__ << " send mgr_command failed: "
+                    << cpp_strerror(r) << dendl;
+      return r;
+    }
+
+    string outstr(outbl.c_str(), outbl.length());
+    ldout(cct, 20) << __func__ << " outstr: " << outstr << dendl;
+    if (outstr.find(fullid) == string::npos) {
+      ldout(cct, 1) << __func__ << " can not find image: " << fullid << dendl;
+      return -ENOENT;
+    }
+
+    string simgdata = outstr.substr(outstr.find(fullid));
+    std::istringstream iss(simgdata);
+    string id, iops, iops_r, iops_w, sep, bytes, bytes_r, bytes_w;
+    iss >> id >> iops >> iops_r >> iops_w >> sep
+        >> bytes >> bytes_r >> bytes_w;
+    if (pio)
+      *pio    = (int64_t)atoi(iops.c_str());
+    if (pio_r)
+      *pio_r  = (int64_t)atoi(iops_r.c_str());
+    if (pio_w)
+      *pio_w  = (int64_t)atoi(iops_w.c_str());
+    if (pbdw)
+      *pbdw   = (int64_t)atoi(bytes.c_str());
+    if (pbdw_r)
+      *pbdw_r = (int64_t)atoi(bytes_r.c_str());
+    if (pbdw_w)
+      *pbdw_w = (int64_t)atoi(bytes_w.c_str());
+
+    return 0;
+  }
+
+  void ImageCtx::set_qos_enabled(bool enabled) {
+    qos_enabled = enabled;
+  }
+
+  int ImageCtx::set_qos_quota(int res, int wgt, int lim, int bdw) {
+    if (res < 0 || wgt < 0 || lim < 0 || bdw < 0) {
+      ldout(cct, 0) << __func__ << " invalid qos spec [ "
+                    << res << ", " << wgt << ", " << lim << " ]" << dendl;
+      return -1;
+    } else if (res || wgt || lim || bdw) {
+      data_ctx.set_qos_quota(res, wgt, lim, bdw);
+    } else {
+      ldout(cct, 5) << __func__ << " setting " << this << " qos spec to [ "
+                    << client_qos_reservation << ", "
+                    << client_qos_weight << ", "
+                    << client_qos_limit << ", "
+                    << client_qos_bandwidth << " ]" << dendl;
+
+      data_ctx.set_qos_quota(client_qos_reservation,
+                             client_qos_weight,
+                             client_qos_limit,
+                             client_qos_bandwidth);
+    }
+    return 0;
+  }
+
 }

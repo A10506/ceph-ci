@@ -602,6 +602,112 @@ void Operations<I>::execute_rename(const std::string &dest_name,
 }
 
 template <typename I>
+int Operations<I>::qos_update(int rsv, int wgt, int lmt, int bdw) {
+  CephContext *cct = m_image_ctx.cct;
+  ldout(cct, 5) << this << " " << __func__ << ": reservation=" << rsv
+                << ", weight=" << wgt << ", limit=" << lmt
+                << ", bandwidth=" << bdw << dendl;
+
+  int r = invoke_async_request("qos_update", false,
+                           boost::bind(&Operations<I>::execute_qos_update, this,
+                                       rsv, wgt, lmt, bdw, _1),
+                           boost::bind(&ImageWatcher<I>::notify_qos_update,
+                                       m_image_ctx.image_watcher,
+                                       rsv, wgt, lmt, bdw, _1));
+
+  ldout(cct, 5) << "qos update finished" << dendl;
+  return r;
+}
+
+template <typename I>
+void Operations<I>::execute_qos_update(int rsv, int wgt, int lmt, int bdw,
+                                             Context *on_finish) {
+  assert(m_image_ctx.owner_lock.is_locked());
+  assert(m_image_ctx.exclusive_lock == nullptr ||
+         m_image_ctx.exclusive_lock->is_lock_owner());
+
+  CephContext *cct = m_image_ctx.cct;
+  ldout(cct, 5) << this << " " << __func__ << ": reservation=" << rsv
+                << ", weight=" << wgt << ", limit=" << lmt
+                << ", bandwidth=" << bdw << dendl;
+
+  if (rsv >= 0) {
+    string srsv = std::to_string(rsv);
+    auto *ctx = new FunctionContext([](int r) { return; });
+    execute_metadata_set(QOS_MRSV, srsv, ctx);
+  }
+  if (wgt >= 0) {
+    string swgt = std::to_string(wgt);
+    auto *ctx = new FunctionContext([](int r) { return; });
+    execute_metadata_set(QOS_MWGT, swgt, ctx);
+  }
+
+  if (lmt >= 0) {
+    string slmt = std::to_string(lmt);
+    auto *ctx = new FunctionContext([](int r) { return; });
+    execute_metadata_set(QOS_MLMT, slmt, ctx);
+  }
+
+  if (bdw >= 0) {
+    string sbdw = std::to_string(bdw);
+    auto *ctx = new FunctionContext([](int r) { return; });
+    execute_metadata_set(QOS_MBDW, sbdw, ctx);
+  }
+
+  auto *ctx = new FunctionContext([](int r) { return; });
+  execute_metadata_set(RBD_CACHE, "false", ctx);
+
+  C_NotifyUpdate<I> *notify = new C_NotifyUpdate<I>(m_image_ctx, on_finish);
+  notify->complete(0);
+}
+
+template <typename I>
+int Operations<I>::qos_remove(int flag) {
+  CephContext *cct = m_image_ctx.cct;
+  ldout(cct, 5) << this << " " << __func__ << ": flag=" << flag << dendl;
+
+  int r = invoke_async_request("qos_remove", false,
+                           boost::bind(&Operations<I>::execute_qos_remove, this,
+                                       flag, _1),
+                           boost::bind(&ImageWatcher<I>::notify_qos_remove,
+                                       m_image_ctx.image_watcher, flag, _1));
+
+  ldout(cct, 5) << "qos remove finished" << dendl;
+  return r;
+}
+
+template <typename I>
+void Operations<I>::execute_qos_remove(int flag, Context *on_finish) {
+  assert(m_image_ctx.owner_lock.is_locked());
+  assert(m_image_ctx.exclusive_lock == nullptr ||
+         m_image_ctx.exclusive_lock->is_lock_owner());
+
+  CephContext *cct = m_image_ctx.cct;
+  ldout(cct, 5) << this << " " << __func__ << ": flag=" << flag << dendl;
+
+  if (flag & QOS_FLAG_RSV) {
+    auto *ctx = new FunctionContext([](int r) { return; });
+    execute_metadata_remove(QOS_MRSV, ctx);
+  }
+  if (flag & QOS_FLAG_WGT) {
+    auto *ctx = new FunctionContext([](int r) { return; });
+    execute_metadata_remove(QOS_MWGT, ctx);
+  }
+  if (flag & QOS_FLAG_LMT) {
+    auto *ctx = new FunctionContext([](int r) { return; });
+    execute_metadata_remove(QOS_MLMT, ctx);
+  }
+  if (flag & QOS_FLAG_BDW) {
+    auto *ctx = new FunctionContext([](int r) { return; });
+    execute_metadata_remove(QOS_MBDW, ctx);
+  }
+
+  C_NotifyUpdate<I> *notify = new C_NotifyUpdate<I>(m_image_ctx, on_finish);
+  notify->complete(0);
+}
+
+
+template <typename I>
 int Operations<I>::resize(uint64_t size, bool allow_shrink, ProgressContext& prog_ctx) {
   CephContext *cct = m_image_ctx.cct;
 

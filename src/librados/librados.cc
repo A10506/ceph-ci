@@ -2173,6 +2173,21 @@ void librados::IoCtx::set_namespace(const string& nspace)
   io_ctx_impl->oloc.nspace = nspace;
 }
 
+void librados::IoCtx::set_qos_quota(int res, int wgt, int lim, int bdw)
+{
+  io_ctx_impl->objecter->update_qos(res, wgt, lim, bdw);
+}
+
+uint32_t librados::IoCtx::get_qos_io_rate()
+{
+  return io_ctx_impl->objecter->get_cur_reqsrate();
+}
+
+uint32_t librados::IoCtx::get_qos_byte_rate()
+{
+  return io_ctx_impl->objecter->get_cur_bytesrate();
+}
+
 int64_t librados::IoCtx::get_id()
 {
   return io_ctx_impl->get_id();

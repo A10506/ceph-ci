@@ -21,6 +21,7 @@
 
 #include "common/Mutex.h"
 #include "common/LogClient.h"
+#include "common/Timer.h"
 
 #include <msg/Messenger.h>
 #include <mon/MonClient.h>
@@ -36,6 +37,8 @@ class MMgrOpen;
 class MMonMgrReport;
 class MCommand;
 struct MonCommand;
+struct MgrCommand;
+class MgrDaemonHook;
 
 
 /**
@@ -79,8 +82,13 @@ protected:
   epoch_t pending_service_map_dirty = 0;
 
   Mutex lock;
+  MgrDaemonHook *m_daemon_hook = nullptr;
 
   std::map<int, cache_stat_t> cache_map; // record cache info by osd-id
+
+  map<pg_t, int64_t> num_objects_recovered_by_pg;
+  set<int> last_adjusted_osds;
+  set<int> last_adjusted_primaries;
 
   static void _generate_command_map(map<string,cmd_vartype>& cmdmap,
                                     map<string,string> &param_str_map);
@@ -91,6 +99,7 @@ protected:
     const map<string,cmd_vartype>& cmdmap,
     const map<string,string>& param_str_map,
     const MonCommand *this_cmd);
+
 
 private:
   friend class ReplyOnFinish;
@@ -107,6 +116,7 @@ private:
 public:
   int init(uint64_t gid, entity_addr_t client_addr);
   void shutdown();
+  void tick();
 
   entity_addr_t get_myaddr() const;
 
@@ -146,7 +156,29 @@ public:
   virtual const char** get_tracked_conf_keys() const override;
   virtual void handle_conf_change(const struct md_config_t *conf,
                           const std::set <std::string> &changed) override;
+  void dump_cluster_state(Formatter *f);
+  void send_reset_recovery_limits(
+    int who,
+    uint8_t options,
+    double bandwidth_factor = 1.0,
+    double maxactive_factor = 1.0,
+    double aggressive_factor = 1.0);
+  void clear_recovery_limits();
+  void maybe_reset_recovery_limits();
 };
+
+class MgrDaemonHook : public AdminSocketHook {
+  DaemonServer *m_server;
+
+public:
+  MgrDaemonHook(DaemonServer *_server)
+    : m_server(_server) {
+  }
+
+  bool call(std::string command, cmdmap_t& cmdmap, std::string format,
+            bufferlist& out) override;
+};
+
 
 #endif
 

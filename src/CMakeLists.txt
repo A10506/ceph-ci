@@ -658,7 +658,7 @@ add_library(common STATIC ${ceph_common_objs})
 target_link_libraries(common ${ceph_common_deps})
 
 add_library(ceph-common SHARED ${ceph_common_objs})
-target_link_libraries(ceph-common ${ceph_common_deps})
+target_link_libraries(ceph-common dmclock ${ceph_common_deps})
 # appease dpkg-shlibdeps
 set_target_properties(ceph-common PROPERTIES
   SOVERSION 0

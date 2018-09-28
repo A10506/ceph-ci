@@ -70,6 +70,11 @@ Skip test on FreeBSD as it generates different output there.
       object-map check            Verify the object map is correct.
       object-map rebuild          Rebuild an invalid object map.
       pool init                   Initialize pool for use by RBD.
+      qos get                     Get qos specs of an image.
+      qos list (qos ls)           List qos specs of images.
+      qos remove (qos rm)         Delete meta qos specs of an image (that's use
+                                  default qos from configuration).
+      qos set                     Set qos specs for an image.
       remove (rm)                 Delete an image.
       rename (mv)                 Rename image within pool.
       resize                      Resize (expand or shrink) image.
@@ -1099,6 +1104,26 @@ Skip test on FreeBSD as it generates different output there.
                        <pool-name> 
   
   Initialize pool for use by RBD.
+
+  rbd help qos get
+  usage: rbd qos get [--pool <pool>] [--image <image>] 
+                     <image-spec> 
+  
+  Get qos specs of an image.
+  
+  Positional arguments
+    <image-spec>         image specification
+                         (example: [<pool-name>/]<image-name>)
+  
+  Optional arguments
+    -p [ --pool ] arg    pool name
+    --image arg          image name
+  
+  rbd help qos list
+  usage: rbd qos list [--pool <pool>] [--format <format>] [--pretty-format] 
+                      <pool-name> 
+  
+  List qos specs of images.
   
   Positional arguments
     <pool-name>          pool name
@@ -1107,6 +1132,39 @@ Skip test on FreeBSD as it generates different output there.
     -p [ --pool ] arg    pool name
     --force              force initialize pool for RBD use if registered by
                          another application
+    --format arg         output format [plain, json, or xml]
+    --pretty-format      pretty formatting (json and xml)
+  
+  rbd help qos remove
+  usage: rbd qos remove [--pool <pool>] [--image <image>] 
+                        <image-spec> 
+  
+  Delete meta qos specs of an image (that's use default qos from configuration).
+  
+  Positional arguments
+    <image-spec>         image specification
+                         (example: [<pool-name>/]<image-name>)
+  
+  Optional arguments
+    -p [ --pool ] arg    pool name
+    --image arg          image name
+  
+  rbd help qos set
+  usage: rbd qos set [--pool <pool>] [--image <image>] 
+                     <image-spec> <resrv> <weight> <limit> 
+  
+  Set qos specs for an image.
+  
+  Positional arguments
+    <image-spec>         image specification
+                         (example: [<pool-name>/]<image-name>)
+    <resrv>              image qos reservation
+    <weight>             image qos weight
+    <limit>              image qos limit
+  
+  Optional arguments
+    -p [ --pool ] arg    pool name
+    --image arg          image name
   
   rbd help remove
   usage: rbd remove [--pool <pool>] [--image <image>] [--no-progress] 

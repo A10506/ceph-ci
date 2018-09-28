@@ -76,6 +76,14 @@ struct OpRequest : public TrackedOp {
     return classes_;
   }
 
+  void set_dmc_op_tracker(dmc_op_tracker &opt) {
+    dmc_opt = opt;
+  }
+
+  dmc_op_tracker get_dmc_op_tracker() const {
+    return dmc_opt;
+  }
+
   void _dump(Formatter *f) const override;
 
   bool has_feature(uint64_t f) const {
@@ -97,6 +105,7 @@ private:
   static const uint8_t flag_commit_sent = 1 << 5;
 
   std::vector<ClassInfo> classes_;
+  dmc_op_tracker dmc_opt;
 
   OpRequest(Message *req, OpTracker *tracker);
 
@@ -115,7 +124,7 @@ public:
   epoch_t min_epoch = 0;      ///< min epoch needed to handle this msg
 
   bool hitset_inserted;
-  const Message *get_req() const { return request; }
+  Message *get_req() const { return request; }
   Message *get_nonconst_req() { return request; }
 
   entity_name_t get_source() {

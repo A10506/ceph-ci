@@ -269,6 +269,33 @@ void ImageWatcher<I>::notify_rename(const std::string &image_name,
 }
 
 template <typename I>
+void ImageWatcher<I>::notify_qos_update(int rsv, int wgt, int lmt, int bdw,
+                                             Context *on_finish) {
+  ldout(m_image_ctx.cct, 10) << this << ": " << __func__
+                             << " [ " << rsv << " " << wgt << " "
+                             << lmt << " " << bdw << " ]" << dendl;
+
+  assert(m_image_ctx.owner_lock.is_locked());
+  assert(m_image_ctx.exclusive_lock &&
+         !m_image_ctx.exclusive_lock->is_lock_owner());
+
+  notify_lock_owner(QosUpdatePayload(rsv, wgt, lmt, bdw), on_finish);
+}
+
+template <typename I>
+void ImageWatcher<I>::notify_qos_remove(int flag, Context *on_finish) {
+  ldout(m_image_ctx.cct, 10) << this << ": " << __func__
+                             << " flag=" << flag << dendl;
+
+  assert(m_image_ctx.owner_lock.is_locked());
+  assert(m_image_ctx.exclusive_lock &&
+         !m_image_ctx.exclusive_lock->is_lock_owner());
+
+  notify_lock_owner(QosRemovePayload(flag), on_finish);
+}
+
+
+template <typename I>
 void ImageWatcher<I>::notify_update_features(uint64_t features, bool enabled,
                                              Context *on_finish) {
   assert(m_image_ctx.owner_lock.is_locked());
@@ -879,6 +906,51 @@ bool ImageWatcher<I>::handle_payload(const RenamePayload& payload,
 
       m_image_ctx.operations->execute_rename(payload.image_name,
                                              new C_ResponseMessage(ack_ctx));
+      return false;
+    } else if (r < 0) {
+      ::encode(ResponseMessage(r), ack_ctx->out);
+    }
+  }
+  return true;
+}
+
+template <typename I>
+bool ImageWatcher<I>::handle_payload(const QosUpdatePayload& payload,
+                                     C_NotifyAck *ack_ctx) {
+  RWLock::RLocker owner_locker(m_image_ctx.owner_lock);
+  if (m_image_ctx.exclusive_lock != nullptr) {
+    int r;
+    if (m_image_ctx.exclusive_lock->accept_requests(&r)) {
+      ldout(m_image_ctx.cct, 10) << this << " remote qos_update request: [ "
+                                 << payload.reservation << " "
+                                 << payload.weight << " "
+                                 << payload.limit << " "
+                                 << payload.bandwidth << " ]" << dendl;
+
+      m_image_ctx.operations->execute_qos_update(payload.reservation,
+                                                 payload.weight,
+                                                 payload.limit,
+                                                 payload.bandwidth,
+                                                 new C_ResponseMessage(ack_ctx));
+      return false;
+    } else if (r < 0) {
+      ::encode(ResponseMessage(r), ack_ctx->out);
+    }
+  }
+  return true;
+}
+
+template <typename I>
+bool ImageWatcher<I>::handle_payload(const QosRemovePayload& payload,
+                                     C_NotifyAck *ack_ctx) {
+  RWLock::RLocker owner_locker(m_image_ctx.owner_lock);
+  if (m_image_ctx.exclusive_lock != nullptr) {
+    int r;
+    if (m_image_ctx.exclusive_lock->accept_requests(&r)) {
+      ldout(m_image_ctx.cct, 10) << this << " remote qos_remove request: "
+                                 << payload.flag << dendl;
+
+      m_image_ctx.operations->execute_qos_remove(payload.flag, new C_ResponseMessage(ack_ctx));
       return false;
     } else if (r < 0) {
       ::encode(ResponseMessage(r), ack_ctx->out);

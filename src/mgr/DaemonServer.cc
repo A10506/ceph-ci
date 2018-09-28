@@ -31,6 +31,7 @@
 #include "messages/MPGStats.h"
 #include "messages/MOSDScrub.h"
 #include "messages/MOSDForceRecovery.h"
+#include "messages/MOSDResetRecoveryLimits.h"
 #include "common/errno.h"
 
 #define dout_context g_ceph_context
@@ -131,6 +132,18 @@ int DaemonServer::init(uint64_t gid, entity_addr_t client_addr)
   msgr->add_dispatcher_tail(this);
 
   started_at = ceph_clock_now();
+
+  m_daemon_hook = new MgrDaemonHook(this);
+  AdminSocket* admin_socket = cct->get_admin_socket();
+
+  int ret = admin_socket->register_command("dump_cluster_state",
+                                       "dump_cluster_state",
+                                       m_daemon_hook,
+                                       "show cluster state of mgr daemon");
+  if (ret < 0 && ret != -EEXIST) {
+    derr << "error registering admin socket command dump_cluster_state: "
+         << cpp_strerror(ret) << dendl;
+  }
 
   return 0;
 }
@@ -334,6 +347,12 @@ void DaemonServer::shutdown()
   dout(10) << "begin" << dendl;
   msgr->shutdown();
   msgr->wait();
+  if (m_daemon_hook) {
+    AdminSocket* admin_socket = cct->get_admin_socket();
+    admin_socket->unregister_command("dump_cluster_state");
+    delete m_daemon_hook;
+    m_daemon_hook = nullptr;
+  }
   dout(10) << "done" << dendl;
 }
 
@@ -1331,6 +1350,53 @@ bool DaemonServer::handle_command(MCommand *m)
     });
     ss << std::endl;
     cmdctx->reply(r, ss);
+  } else if (prefix == "mgr report imgs_perf") {
+    string name, id;
+    cmd_getval(g_ceph_context, cmdctx->cmdmap, "name", name);
+    cmd_getval(g_ceph_context, cmdctx->cmdmap, "id", id);
+    if (id.empty()) {
+      r = -EINVAL;
+      ss << "image id unspecified";
+      cmdctx->reply(r, ss);
+      return true;
+    }
+
+    bufferlist data(m->get_data());
+    op_stat_t opstat;
+    try {
+      bufferlist::iterator bl(data.begin());
+      opstat.decode(bl);
+    } catch (const std::exception &e) {
+      r = -EINVAL;
+      ss << "Failed to parse report optstat: " << e.what();
+      cmdctx->reply(r, ss);
+      return true;
+    }
+
+    cluster_state.update_image_stats(id, opstat, name);
+    cmdctx->reply(0, "");
+    return true;
+  } else if (prefix == "mgr dump imgs_perf") {
+    set<string> what;
+    vector<string> dumpcontents;
+    if (cmd_getval(g_ceph_context, cmdctx->cmdmap, "dumpcontents", dumpcontents)) {
+        copy(dumpcontents.begin(), dumpcontents.end(),
+           inserter(what, what.end()));
+    }
+    if (what.empty()) {
+      what.insert("all");
+    }
+
+    if (f) {
+      cluster_state.dump_imgsperf(f.get(), what);
+      f->flush(cmdctx->odata);
+    } else {
+      stringstream dumps;
+      ss << "dumping: " << what;
+      cluster_state.dump_imgsperf(dumps, what);
+      cmdctx->odata.append(dumps);
+    }
+    cmdctx->reply(0, "");
     return true;
   } else if (prefix == "mgr report cache-stat") {
     auto split = [](const std::string& content, std::string split, std::list<std::string>& fields) {
@@ -1578,6 +1644,7 @@ void DaemonServer::send_report()
   py_modules.get_health_checks(&m->health_checks);
 
   cluster_state.with_pgmap([&](const PGMap& pg_map) {
+      cluster_state.try_mark_pg_stale();
       cluster_state.update_delta_stats();
 
       if (pending_service_map.epoch) {
@@ -1722,3 +1789,323 @@ void DaemonServer::_send_configure(ConnectionRef c)
   c->send_message(configure);
 }
 
+void DaemonServer::tick() {
+  cluster_state.sample_perf_stats();
+  maybe_reset_recovery_limits();
+}
+
+void DaemonServer::dump_cluster_state(Formatter *f) {
+  f->open_object_section("cluster state");
+  cluster_state.dump(f);
+  f->close_section();
+}
+
+void DaemonServer::send_reset_recovery_limits(
+  int who,
+  uint8_t options,
+  double bandwidth_factor,
+  double maxactive_factor,
+  double aggressive_factor) {
+  auto p = osd_cons.find(who);
+  if (p == osd_cons.end()) {
+    derr << "osd." << who << " is not currently connected" << dendl;
+    return;
+  }
+  for (auto& con : p->second) {
+    con->send_message(new MOSDResetRecoveryLimits(
+      monc->get_fsid(),
+      options,
+      bandwidth_factor,
+      maxactive_factor,
+      aggressive_factor));
+  }
+  if ((options & OSD_RESET_RECOVERY_BANDWIDTH) ==
+                 OSD_RESET_RECOVERY_BANDWIDTH)
+    last_adjusted_osds.insert(who);
+  if ((options & OSD_RESET_RECOVERY_MAXACTIVE) ==
+                 OSD_RESET_RECOVERY_MAXACTIVE)
+    last_adjusted_primaries.insert(who);
+}
+
+void DaemonServer::clear_recovery_limits()
+{
+  num_objects_recovered_by_pg.clear();
+  for (auto o : last_adjusted_osds) {
+    uint8_t options = OSD_RESET_RECOVERY_BANDWIDTH;
+    auto it = last_adjusted_primaries.find(o);
+    if (it != last_adjusted_primaries.end()) {
+      // clear both
+      options |= OSD_RESET_RECOVERY_MAXACTIVE;
+      dout(0) << "restore osd." << o << " recovery settings" << dendl;
+    } else {
+      dout(0) << "restore osd." << o << " bandwidth settings" << dendl;
+    }
+    send_reset_recovery_limits(o, options);
+    if (it != last_adjusted_primaries.end()) {
+      last_adjusted_primaries.erase(it);
+    }
+  }
+  last_adjusted_osds.clear();
+  for (auto p : last_adjusted_primaries) {
+    dout(0) << "restore primary osd." << p << " max active settings" << dendl;
+    send_reset_recovery_limits(p, OSD_RESET_RECOVERY_MAXACTIVE);
+  }
+  last_adjusted_primaries.clear();
+}
+
+void DaemonServer::maybe_reset_recovery_limits()
+{
+  bool all_active_clean = false;
+  bool any_backfilling_pgs = false;
+  map<int, int64_t> num_objects_to_recover_by_osd;
+  map<int, int64_t> num_objects_to_recover_by_primary;
+  // collect pg backfilling info
+  cluster_state.with_pgmap([&](const PGMap& pg_map) {
+    int num_active_clean = 0;
+    for (auto& p : pg_map.num_pg_by_state) {
+      if ((p.first & PG_STATE_BACKFILLING) == PG_STATE_BACKFILLING)
+        any_backfilling_pgs = true;
+      if ((p.first & (PG_STATE_ACTIVE | PG_STATE_CLEAN)) ==
+          (PG_STATE_ACTIVE | PG_STATE_CLEAN))
+        num_active_clean += p.second;
+    }
+    if (num_active_clean == pg_map.num_pg)
+      all_active_clean = true;
+    if (!any_backfilling_pgs)
+      return;
+    for (auto &ps: pg_map.pg_stat) {
+      auto stat = ps.second;
+      if ((stat.state & PG_STATE_BACKFILLING) != PG_STATE_BACKFILLING)
+        continue;
+      auto num_objects_recovered = num_objects_recovered_by_pg[ps.first] -
+        stat.stats.sum.num_objects_recovered;
+      num_objects_recovered_by_pg[ps.first] =
+        stat.stats.sum.num_objects_recovered;
+      if (num_objects_recovered < 0)
+        num_objects_recovered = 0;
+      auto num_objects_to_recover = stat.stats.sum.num_objects -
+        num_objects_recovered;
+      if (!stat.acting.empty()) {
+        auto acting_primary = *(stat.acting.begin());
+        num_objects_to_recover_by_primary[acting_primary] +=
+          num_objects_to_recover;
+      }
+      for (auto u: stat.up) {
+        if (std::find(stat.acting.begin(), stat.acting.end(), u) !=
+            stat.acting.end())
+          continue;
+        num_objects_to_recover_by_osd[u] += num_objects_to_recover;
+      }
+    }
+  });
+
+  if (all_active_clean) {
+    dout(10) << "all PGs become active+clean again, do cleanup" << dendl;
+    clear_recovery_limits();
+    return;
+  }
+
+  if (!any_backfilling_pgs) {
+    dout(10) << "no backfilling PGs, cancelling" << dendl;
+    return;
+  }
+
+  auto conf = g_ceph_context->_conf;
+  auto min_objects = conf->get_val<int64_t>(
+    "mgr_recovery_balancer_min_objects");
+  if (min_objects < 0) {
+    dout(10) << "disabled by setting min_objects to " << min_objects << dendl;
+    clear_recovery_limits();
+    return;
+  }
+  auto min_diff = conf->get_val<double>("mgr_recovery_balancer_min_diff");
+  auto min_adjustment_factor = conf->get_val<double>(
+    "mgr_recovery_balancer_min_adjustment_factor");
+  auto max_adjustment_factor = conf->get_val<double>(
+    "mgr_recovery_balancer_max_adjustment_factor");
+  auto do_aggressive_adjustment = conf->get_val<bool>(
+    "mgr_recovery_balancer_do_aggressive_adjustment");
+  auto min_aggressive_osds = conf->get_val<int64_t>(
+    "mgr_recovery_balancer_min_aggressive_osds");
+  auto max_aggressive_adjustment_factor = conf->get_val<double>(
+    "mgr_recovery_balancer_max_aggressive_adjustment_factor");
+
+  do {
+    // backfill_targets first
+    auto it = num_objects_to_recover_by_osd.begin();
+    while (it != num_objects_to_recover_by_osd.end()) {
+      if (it->second < min_objects) {
+        dout(10) << "osd." << it->first << " only has " << it->second
+                 << " object(s) remaining to recover, which is < "
+                 << min_objects << ", skipping"
+                 << dendl;
+        num_objects_to_recover_by_osd.erase(it++);
+      } else {
+        it++;
+      }
+    }
+
+    int64_t osd_num = num_objects_to_recover_by_osd.size();
+    if (osd_num == 0) {
+      dout(10) << "all backfilling PGs are going to finish quickly,"
+               << "cancelling"
+               << dendl;
+      return;
+    } else if (osd_num <= min_aggressive_osds) {
+      dout(10) << "only " << osd_num << " backfilling-in OSDs (which is <= "
+               << min_aggressive_osds << "), will enable aggressive mode"
+               << dendl;
+      for (auto &o : num_objects_to_recover_by_osd) {
+        auto who = o.first;
+        dout(0) << "aggressively reset osd." << who << "'s"
+                << "recovery bandwidth into " << max_adjustment_factor << "x"
+                << ", and can be promoted to "
+                << max_aggressive_adjustment_factor << "x when appropriate"
+                << dendl;
+        send_reset_recovery_limits(who,
+                                   OSD_RESET_RECOVERY_BANDWIDTH,
+                                   max_adjustment_factor,
+                                   1, // leave max-active unchanged
+                                   max_aggressive_adjustment_factor);
+      }
+      break; // continue to adjust primaries
+    } else {
+      dout(10) << "OSDs will do adjustment:"
+               << num_objects_to_recover_by_osd
+               << dendl;
+    }
+
+    int64_t total = 0;
+    int64_t average;
+    for (auto &o : num_objects_to_recover_by_osd) {
+      total += o.second;
+    }
+    average = total / osd_num;
+    assert(average > 0);
+    for (auto &o : num_objects_to_recover_by_osd) {
+      auto who = o.first;
+      auto factor = o.second / (double)average;
+      auto diff = abs(1.0 - factor);
+      if (diff < min_diff) {
+        dout(10) << "osd." << who << " adjustment diff " << diff
+                 << " < min_diff " << min_diff << ", skipping"
+                 << dendl;
+        continue;
+      }
+      factor = std::max(factor, min_adjustment_factor);
+      factor = std::min(factor, max_adjustment_factor);
+      dout(0) << "adjust osd." << who
+              << "'s recovery bandwidth into " << factor << "x"
+              << dendl;
+      send_reset_recovery_limits(who, OSD_RESET_RECOVERY_BANDWIDTH, factor);
+    }
+  } while (false);
+
+  do {
+    // adjust primaries too, if possible
+    auto it = num_objects_to_recover_by_primary.begin();
+    while (it != num_objects_to_recover_by_primary.end()) {
+      if (it->second < min_objects) {
+        dout(10) << "osd." << it->first << " only has " << it->second
+                 << " object(s) remaining to recover, which is < "
+                 << min_objects << ", skipping"
+                 << dendl;
+        num_objects_to_recover_by_primary.erase(it++);
+      } else {
+        it++;
+      }
+    }
+    int64_t primary_num = num_objects_to_recover_by_primary.size();
+    if (primary_num == 0) {
+      dout(10) << "no primaries left to adjust"
+               << dendl;
+      return;
+    } else if (primary_num <= min_aggressive_osds) {
+      dout(10) << "only " << primary_num << " backfilling primaries "
+               << "(which is <= " << min_aggressive_osds << "), "
+               << "will enable aggressive mode"
+               << dendl;
+      for (auto &p : num_objects_to_recover_by_primary) {
+        auto who = p.first;
+        dout(0) << "aggressively reset primary osd." << who << "'s "
+                << "osd_recovery_max_active into "
+                << max_adjustment_factor << "x"
+                << ", and can be promoted to "
+                << max_aggressive_adjustment_factor << "x when appropriate"
+                << dendl;
+        send_reset_recovery_limits(who,
+                                   OSD_RESET_RECOVERY_MAXACTIVE,
+                                   1, // leave bandwidth unchanged
+                                   max_adjustment_factor,
+                                   max_aggressive_adjustment_factor);
+      }
+      return;
+    } else {
+      dout(10) << "Primaries will do adjustment:"
+               << num_objects_to_recover_by_primary
+               << dendl;
+    }
+
+    int64_t total = 0;
+    int64_t average;
+    int64_t min = INT64_MAX;
+    for (auto &p : num_objects_to_recover_by_primary) {
+      total += p.second;
+      if (p.second < min)
+        min = p.second;
+    }
+    average = total / primary_num;
+    assert(average > 0);
+    assert(min > 0);
+    for (auto &p : num_objects_to_recover_by_primary) {
+      auto who = p.first;
+      auto factor = p.second / (double)average;
+      auto aggressive_factor = p.second / (double)min;
+      if (p.second <= average) {
+        dout(10) << "primary osd." << who << " has less objects " << p.second
+                 << " < average " << average
+                 << ", reset factor to 1x (no change)"
+                 << dendl;
+        factor = 1.0;
+      } else {
+        auto diff = factor - 1.0;
+        if (diff < min_diff) {
+          dout(10) << "primary osd." << who << " adjustment diff " << diff
+                   << " < min_diff " << min_diff
+                   << ", reset factor to 1x (no change)"
+                   << dendl;
+          factor = 1.0;
+        }
+      }
+      factor = std::min(factor, max_adjustment_factor);
+      aggressive_factor = std::min(aggressive_factor,
+        max_aggressive_adjustment_factor);
+      aggressive_factor = do_aggressive_adjustment ? aggressive_factor : 1;
+      dout(0) << "adjust primary osd." << who
+              << "'s osd_recovery_max_active into " << factor << "x"
+              << ", and can be promoted to " << aggressive_factor << "x"
+              << " when appropriate"
+              << dendl;
+      send_reset_recovery_limits(who,
+                                 OSD_RESET_RECOVERY_MAXACTIVE,
+                                 1,
+                                 factor,
+                                 aggressive_factor);
+    }
+  } while (false);
+}
+
+bool MgrDaemonHook::call(std::string command, cmdmap_t& cmdmap,
+			 std::string format, bufferlist& out)
+{
+  Formatter *f = Formatter::create(
+                 format, "json-pretty", "json-pretty");
+
+  if (command == "dump_cluster_state") {
+    m_server->dump_cluster_state(f);
+  }
+
+  f->flush(out);
+  delete f;
+  return true;
+}

@@ -949,6 +949,7 @@ protected:
 
   // stats that persist lazily
   object_stat_collection_t unstable_stats;
+  op_stat_t inc_op_stats;
 
   // publish stats
   Mutex pg_stats_publish_lock;

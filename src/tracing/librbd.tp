@@ -2320,3 +2320,50 @@ TRACEPOINT_EVENT(librbd, update_unwatch_exit,
         ctf_integer(int, retval, retval)
     )
 )
+TRACEPOINT_EVENT(librbd, set_qos_quota_enter,
+    TP_ARGS(
+        void*, imagectx),
+    TP_FIELDS(
+        ctf_integer_hex(void*, imagctx, imagectx)
+    )
+)
+
+TRACEPOINT_EVENT(librbd, set_qos_quota_exit,
+    TP_ARGS(
+        int, retval),
+    TP_FIELDS(
+        ctf_integer(int, retval, retval)
+    )
+)
+
+TRACEPOINT_EVENT(librbd, get_qos_io_rate_enter,
+    TP_ARGS(
+        void*, imagectx),
+    TP_FIELDS(
+        ctf_integer_hex(void*, imagctx, imagectx)
+    )
+)
+
+TRACEPOINT_EVENT(librbd, get_qos_io_rate_exit,
+    TP_ARGS(
+        uint32_t, retval),
+    TP_FIELDS(
+        ctf_integer(uint32_t, retval, retval)
+    )
+)
+
+TRACEPOINT_EVENT(librbd, get_qos_byte_rate_enter,
+    TP_ARGS(
+        void*, imagectx),
+    TP_FIELDS(
+        ctf_integer_hex(void*, imagctx, imagectx)
+    )
+)
+
+TRACEPOINT_EVENT(librbd, get_qos_byte_rate_exit,
+    TP_ARGS(
+        uint32_t, retval),
+    TP_FIELDS(
+        ctf_integer(uint32_t, retval, retval)
+    )
+)

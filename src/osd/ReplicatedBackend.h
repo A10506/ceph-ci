@@ -226,6 +226,9 @@ private:
   void _do_push(OpRequestRef op);
   void _do_pull_response(OpRequestRef op);
   void do_push(OpRequestRef op) {
+    // replicas send pushes on primary pulling,
+    // hence this works for both primary and replica side...
+    get_parent()->get_logger()->inc(l_osd_push_rx);
     if (is_primary()) {
       _do_pull_response(op);
     } else {

@@ -890,7 +890,7 @@ int init_io_ctx(librados::Rados &rados, const std::string &pool_name,
 }
 
 int open_image(librados::IoCtx &io_ctx, const std::string &image_name,
-               bool read_only, librbd::Image *image) {
+               bool read_only, librbd::Image *image, bool bench) {
   int r;
   librbd::RBD rbd;
   if (read_only) {
@@ -904,11 +904,16 @@ int open_image(librados::IoCtx &io_ctx, const std::string &image_name,
               << cpp_strerror(r) << std::endl;
     return r;
   }
+  if (!bench) {
+    // disable qos
+    image->set_qos_enabled(false);
+    image->set_qos_quota(0, 100);
+  }
   return 0;
 }
 
 int open_image_by_id(librados::IoCtx &io_ctx, const std::string &image_id,
-                     bool read_only, librbd::Image *image) {
+                     bool read_only, librbd::Image *image, bool bench) {
   int r;
   librbd::RBD rbd;
   if (read_only) {
@@ -922,6 +927,11 @@ int open_image_by_id(librados::IoCtx &io_ctx, const std::string &image_id,
               << cpp_strerror(r) << std::endl;
     return r;
   }
+  if (!bench) {
+    // disable qos
+    image->set_qos_enabled(false);
+    image->set_qos_quota(0, 100);
+  }
   return 0;
 }
 
@@ -930,16 +940,16 @@ int init_and_open_image(const std::string &pool_name,
                         const std::string &image_id,
                         const std::string &snap_name, bool read_only,
                         librados::Rados *rados, librados::IoCtx *io_ctx,
-                        librbd::Image *image) {
+                        librbd::Image *image, bool bench) {
   int r = init(pool_name, rados, io_ctx);
   if (r < 0) {
     return r;
   }
 
   if (image_id.empty()) {
-    r = open_image(*io_ctx, image_name, read_only, image);
+    r = open_image(*io_ctx, image_name, read_only, image, bench);
   } else {
-    r = open_image_by_id(*io_ctx, image_id, read_only, image);
+    r = open_image_by_id(*io_ctx, image_id, read_only, image, bench);
   }
   if (r < 0) {
     return r;

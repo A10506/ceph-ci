@@ -442,6 +442,11 @@ public:
 
   int update_watch(UpdateWatchCtx *ctx, uint64_t *handle);
   int update_unwatch(uint64_t handle);
+  void set_qos_enabled(bool enabled = true);
+  int set_qos_quota(int res = 0, int wgt = 0, int lim = 0, int bdw = 0);
+  int qos_spec_set(int rsv, int wgt, int lmt, int bdw);
+  int qos_spec_get(int *rsv, int *wgt, int *lmt, int *bdw, int *fmeta_rwl);
+  int qos_spec_del();
 
 private:
   friend class RBD;

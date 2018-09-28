@@ -233,6 +233,9 @@ public:
 
   // mapping of osd to most recently reported osdmap epoch
   mempool::pgmap::unordered_map<int32_t,epoch_t> osd_epochs;
+  mempool::pgmap::unordered_map<string, perf_stat_t> perf_images;
+  mempool::pgmap::unordered_map<int64_t, perf_stat_t> perf_pools;
+  perf_stat_t perf_sum;
 
   class Incremental {
   public:
@@ -335,6 +338,13 @@ public:
     per_pool_sum_deltas_stamps.erase(pool);
     per_pool_sum_delta.erase(pool);
   }
+
+  enum {
+    op_latency_type_misc,
+    op_latency_type_rd,
+    op_latency_type_wr,
+    op_latency_type_max
+  };
 
  private:
   void update_delta(
@@ -454,6 +464,8 @@ public:
     get_rules_avail(osd_map, &avail_space_by_rule);
     PGMapDigest::dump_pool_stats_full(osd_map, ss, f, verbose);
   }
+  void dump_perf_stats(Formatter *f) const;
+  void dump_perf_stats(ostream& ss) const;
 
   void dump_pg_stats_plain(
     ostream& ss,
@@ -574,6 +586,13 @@ public:
       bool check_all,
       const set<int>& need_check_down_pg_osds,
       PGMap::Incremental *pending_inc);
+
+  static void check_down_pgs(
+      const OSDMap &osd_map,
+      const PGMap &pg_map,
+      bool check_all,
+      const set<int>& need_check_down_pg_osds,
+      map<pg_t, utime_t> &pending_stale);
 };
 
 namespace reweight {

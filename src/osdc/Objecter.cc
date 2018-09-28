@@ -230,6 +230,44 @@ void Objecter::update_crush_location()
   crush_location = cct->crush_location.get_location();
 }
 
+int Objecter::update_qos(int res, int wgt, int lim, int bdw) {
+  unique_lock wl(rwlock);
+
+  /* sanity check */
+  dmc_qos_spec new_qos(res, wgt, lim, bdw);
+  if (!new_qos.valid()) {
+    ldout(cct, 0) << " invalid QoS parameters: "
+                  << " reservation=" << res
+                  << ", weight=" << wgt << ", limit=" << lim
+                  << ", bandwidth=" << bdw << dendl;
+    return -EINVAL;
+  }
+
+  if (qos.unchanged(new_qos)) {
+    ldout(cct, 10) << " qos unchanged." << dendl;
+    return 0;
+  }
+
+  qos.assign_qos(new_qos);
+  qos.inc_version();
+
+  ldout(cct, 10) << " update QoS success: "
+                 << " reservation=" << qos.reservation
+                 << ", weight=" << qos.weight << ", limit=" << qos.limit
+                 << ", bandwidth=" << qos.bandwidth
+                 << ", version=" << qos.version << dendl;
+  return 0;
+}
+
+uint32_t Objecter::get_cur_reqsrate() {
+  return reqs_stats.rate_req_done;
+}
+
+uint32_t Objecter::get_cur_bytesrate() {
+  return reqs_stats.rate_bytes_done;
+}
+
+
 // messages ------------------------------
 
 /*
@@ -383,6 +421,15 @@ void Objecter::init()
 	       << cpp_strerror(ret) << dendl;
   }
 
+  ret = admin_socket->register_command("dump_requests_rate",
+                      "dump_requests_rate",
+                      m_request_state_hook,
+                      "show requests submit | done rate");
+  if (ret < 0 && ret != -EEXIST) {
+    lderr(cct) << "error registering admin socket command: "
+              << cpp_strerror(ret) << dendl;
+  }
+
   update_crush_location();
 
   cct->_conf->add_observer(this);
@@ -518,6 +565,7 @@ void Objecter::shutdown()
   if (m_request_state_hook) {
     AdminSocket* admin_socket = cct->get_admin_socket();
     admin_socket->unregister_command("objecter_requests");
+    admin_socket->unregister_command("dump_requests_rate");
     delete m_request_state_hook;
     m_request_state_hook = NULL;
   }
@@ -3277,21 +3325,40 @@ void Objecter::_send_op(Op *op, MOSDOp *m)
 
   op->incarnation = op->session->incarnation;
 
-  m->set_tid(op->tid);
+  pg_t _pgid = m->get_pg();
+  if ((m->get_flags() & CEPH_OSD_FLAG_PGOP) == 0 && osdmap->have_pg_pool(_pgid.pool())) {
+    _pgid = osdmap->raw_pg_to_pg(_pgid);
+  }
+  spg_t pgid;
+  if (!osdmap->get_primary_shard(_pgid, &pgid)) {
+    ldout(cct, 0) << "failed to get_primary_shard for " << op->tid << dendl;
+  }
 
+  int pg_shard = pgid.ps() % cct->_conf->osd_op_num_shards;
+  int server_id = dmc::gen_server_id(op->target.osd, pg_shard);
+  m->set_tid(op->tid);
+  m->set_dmc_qos_spec(_get_dmc_qos_spec());
+  m->set_dmc_op_tracker(_get_dmc_op_tracker(server_id));
+  m->update_op_tracker_cost(calc_op_budget(op));
+  ldout(cct, 30) << "delta:" << m->get_dmc_op_tracker().delta
+                 << ", rho:" << m->get_dmc_op_tracker().rho
+                 << ", cost:" << m->get_dmc_op_tracker().cost
+                 << ", data_len:" << calc_op_budget(op)
+                 << dendl;
   if (op->trace.valid()) {
     m->trace.init("op msg", nullptr, &op->trace);
   }
   op->session->con->send_message(m);
+  reqs_stats.num_req_subt++;
 }
 
-int Objecter::calc_op_budget(Op *op)
+int Objecter::calc_op_budget(Op *op, bool skip_write)
 {
   int op_budget = 0;
   for (vector<OSDOp>::iterator i = op->ops.begin();
        i != op->ops.end();
        ++i) {
-    if (i->op.op & CEPH_OSD_OP_MODE_WR) {
+    if (i->op.op & CEPH_OSD_OP_MODE_WR && !skip_write) {
       op_budget += i->indata.length();
     } else if (ceph_osd_op_mode_read(i->op.op)) {
       if (ceph_osd_op_type_data(i->op.op)) {
@@ -3482,6 +3549,12 @@ void Objecter::handle_osd_op_reply(MOSDOpReply *m)
     op->outbl = 0;
   }
 
+  if (cct->_conf->objecter_dmc_op_cost_from_rados) {
+    m->update_op_tracker_cost(m->get_op_cost());
+  } else {
+    m->update_op_tracker_cost(calc_op_budget(op, true));
+  }
+
   // per-op result demuxing
   vector<OSDOp> out_ops;
   m->claim_ops(out_ops);
@@ -3524,6 +3597,33 @@ void Objecter::handle_osd_op_reply(MOSDOpReply *m)
     op->onfinish = NULL;
   }
   logger->inc(l_osdc_op_reply);
+
+  pg_t _pgid = m->get_pg();
+  if ((m->get_flags() & CEPH_OSD_FLAG_PGOP) == 0 && osdmap->have_pg_pool(_pgid.pool())) {
+    _pgid = osdmap->raw_pg_to_pg(_pgid);
+  }
+  spg_t pgid;
+  if (!osdmap->get_primary_shard(_pgid, &pgid)) {
+    ldout(cct, 0) << "failed to get_primary_shard for " << op->tid << dendl;
+  }
+
+  int osd_num = (int)m->get_source().num();
+  int pg_shard = pgid.ps() % cct->_conf->osd_op_num_shards;
+  dmc_op_tracker opt = m->get_dmc_op_tracker();
+  ldout(cct, 30) << __func__ << " cost " << opt.cost << dendl;
+  switch (opt.phase) {
+  case DMC_OP_PHASE_RESERVATION:
+    dmc_sertrk.track_resp(dmc::gen_server_id(osd_num, pg_shard),
+      crimson::dmclock::PhaseType::reservation, opt.cost);
+    reqs_stats.num_req_done_resv++;
+    break;
+  case DMC_OP_PHASE_PRIORITY:
+    dmc_sertrk.track_resp(dmc::gen_server_id(osd_num, pg_shard),
+      crimson::dmclock::PhaseType::priority, opt.cost);
+    break;
+  }
+  reqs_stats.num_req_done++;
+  reqs_stats.num_bytes_done += opt.cost;
 
   /* get it before we call _finish_op() */
   auto completion_lock = s->get_lock(op->target.base_oid);
@@ -4535,6 +4635,48 @@ void Objecter::dump_requests(Formatter *fmt)
   fmt->close_section(); // requests object
 }
 
+void Objecter::dump_reqs_rate(Formatter *fmt)
+{
+  uint64_t avgrate_5seconds_done  = 0;
+  uint64_t avgrate_5seconds_resv  = 0;
+  uint64_t avgrate_30seconds_done = 0;
+  uint64_t avgrate_30seconds_resv = 0;
+
+  fmt->open_object_section("request_rate");
+  fmt->dump_format("client qos spec", "[ rsv:%d, wgt:%d, lmt:%d, bdw:%d ].v%u",
+    qos.reservation, qos.weight, qos.limit, qos.bandwidth, qos.version);
+  fmt->dump_format("reqs subt-done ", "[ %ld - %ld = %ld ]",
+    reqs_stats.num_req_subt.load(), reqs_stats.num_req_done.load(),
+    reqs_stats.num_req_subt.load() - reqs_stats.num_req_done.load());
+
+  for(uint32_t n = 0, idx = (reqs_stats.history_idx - 1) % reqs_stats.rate_done_history.size();
+    n < 30; n++, idx = (idx == 0 ? reqs_stats.rate_done_history.size() - 1 : idx - 1)) {
+    if (n < 5) {
+      avgrate_5seconds_done += reqs_stats.rate_done_history[idx].first;
+      avgrate_5seconds_resv += reqs_stats.rate_done_history[idx].second;
+    }
+    avgrate_30seconds_done += reqs_stats.rate_done_history[idx].first;
+    avgrate_30seconds_resv += reqs_stats.rate_done_history[idx].second;
+  }
+  avgrate_5seconds_done = (avgrate_5seconds_done + 2) / 5; //+2 for round
+  avgrate_5seconds_resv = (avgrate_5seconds_resv + 2) / 5; //+2 for round
+  avgrate_30seconds_done = (avgrate_30seconds_done + 15) / 30; //+15 for round
+  avgrate_30seconds_resv = (avgrate_30seconds_resv + 15) / 30; //+15 for round
+
+  fmt->dump_format("subt rate|peak ", "[ %d|%-d ]",
+    reqs_stats.rate_req_subt, reqs_stats.rate_req_subt_peak);
+  fmt->dump_format("done rate|peak*", "[ %d|%-d, %d,%d ]  r:[ %d|%-d, %d,%d ]",
+    reqs_stats.rate_req_done, reqs_stats.rate_req_done_peak,
+    avgrate_5seconds_done, avgrate_30seconds_done,
+    reqs_stats.rate_req_done_resv, reqs_stats.rate_req_resv_peak,
+    avgrate_5seconds_resv, avgrate_30seconds_resv);
+  fmt->dump_format("bandwidth rate ", "[ %d ]", reqs_stats.rate_bytes_done);
+  dmc_sertrk.dump(fmt);
+  reqs_stats.dump(fmt);
+  fmt->close_section();
+}
+
+
 void Objecter::_dump_ops(const OSDSession *s, Formatter *fmt)
 {
   for (map<ceph_tid_t,Op*>::const_iterator p = s->ops.begin();
@@ -4714,7 +4856,13 @@ bool Objecter::RequestStateHook::call(std::string command, cmdmap_t& cmdmap,
 {
   Formatter *f = Formatter::create(format, "json-pretty", "json-pretty");
   shared_lock rl(m_objecter->rwlock);
-  m_objecter->dump_requests(f);
+
+  if (command == "objecter_requests") {
+    m_objecter->dump_requests(f);
+  } else if (command == "dump_requests_rate") {
+    m_objecter->dump_reqs_rate(f);
+  }
+
   f->flush(out);
   delete f;
   return true;

@@ -1842,9 +1842,12 @@ bool ReplicatedBackend::handle_pull_response(
 
   pi.stat.num_keys_recovered += pop.omap_entries.size();
   pi.stat.num_bytes_recovered += data.length();
+  get_parent()->get_op_stat()->recovered_keys += pop.omap_entries.size();
+  get_parent()->get_op_stat()->recovered_bytes += data.length();
 
   if (complete) {
     pi.stat.num_objects_recovered++;
+    get_parent()->get_op_stat()->recovered_objects++;
     clear_pull_from(piter);
     to_continue->push_back({hoid, pi.stat});
     get_parent()->on_local_recover(
@@ -2105,16 +2108,21 @@ int ReplicatedBackend::build_push_op(const ObjectRecoveryInfo &recovery_info,
 
   if (new_progress.is_complete(recovery_info)) {
     new_progress.data_complete = true;
-    if (stat)
+    if (stat) {
       stat->num_objects_recovered++;
+      get_parent()->get_op_stat()->recovered_objects++;
+    }
   }
 
   if (stat) {
     stat->num_keys_recovered += out_op->omap_entries.size();
     stat->num_bytes_recovered += out_op->data.length();
+
+    get_parent()->get_op_stat()->recovered_keys += out_op->omap_entries.size();
+    get_parent()->get_op_stat()->recovered_bytes += out_op->data.length();
   }
 
-  get_parent()->get_logger()->inc(l_osd_push);
+  get_parent()->get_logger()->inc(l_osd_push_tx);
   get_parent()->get_logger()->inc(l_osd_push_outb, out_op->data.length());
 
   // send

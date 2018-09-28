@@ -126,7 +126,8 @@ public:
     const entity_inst_t &owner, epoch_t e)
     : qvariant(op), cost(cost), priority(priority), start_time(start_time),
       owner(owner), map_epoch(e) {}
-
+  PGQueueable()
+    : cost(-1) {}
   const boost::optional<OpRequestRef> maybe_get_op() const {
     const OpRequestRef *op = boost::get<OpRequestRef>(&qvariant);
     return op ? OpRequestRef(*op) : boost::optional<OpRequestRef>();
@@ -141,8 +142,10 @@ public:
   }
   unsigned get_priority() const { return priority; }
   int get_cost() const { return cost; }
+  int is_valid() const { return cost >= 0; }
   utime_t get_start_time() const { return start_time; }
   entity_inst_t get_owner() const { return owner; }
   epoch_t get_map_epoch() const { return map_epoch; }
   const QVariant& get_variant() const { return qvariant; }
+  QVariant& get_variant() { return qvariant; }
 }; // struct PGQueueable

@@ -1802,6 +1802,16 @@ struct object_stat_sum_t {
 
   void add(const object_stat_sum_t& o);
   void sub(const object_stat_sum_t& o);
+  bool is_negative() const {
+    return
+      num_rd < 0 ||
+      num_rd_kb < 0 ||
+      num_wr < 0 ||
+      num_wr_kb < 0 ||
+      num_objects_recovered < 0 ||
+      num_bytes_recovered < 0 ||
+      num_keys_recovered < 0;
+  }
 
   void dump(Formatter *f) const;
   void padding_check() {
@@ -2043,6 +2053,227 @@ struct pg_stat_t {
 WRITE_CLASS_ENCODER(pg_stat_t)
 
 bool operator==(const pg_stat_t& l, const pg_stat_t& r);
+
+/*
+ * aggregate op-related stats
+ */
+struct op_stat_t {
+  uint64_t op_num = 0;
+  uint64_t op_bytes = 0;
+  uint64_t op_latency = 0; // in nanoseconds
+  uint64_t rd_num = 0;
+  uint64_t rd_bytes = 0;
+  uint64_t rd_latency = 0; // in nanoseconds
+  uint64_t wr_num = 0;
+  uint64_t wr_bytes = 0;
+  uint64_t wr_latency = 0; // in nanoseconds
+  uint64_t recovered_objects = 0;
+  uint64_t recovered_bytes = 0;
+  uint64_t recovered_keys = 0;
+
+  op_stat_t() {
+  }
+
+  void add(const op_stat_t& o) {
+    op_num += o.op_num;
+    op_bytes += o.op_bytes;
+    op_latency += o.op_latency;
+    rd_num += o.rd_num;
+    rd_bytes += o.rd_bytes;
+    rd_latency += o.rd_latency;
+    wr_num += o.wr_num;
+    wr_bytes += o.wr_bytes;
+    wr_latency += o.wr_latency;
+    recovered_objects += o.recovered_objects;
+    recovered_bytes += o.recovered_bytes;
+    recovered_keys += o.recovered_keys;
+  }
+
+  void floor_sub(const op_stat_t& o) {
+  #define FLOOR_SUB(x) x = std::max(x - o.x, (decltype(x))0)
+    FLOOR_SUB(op_num);
+    FLOOR_SUB(op_bytes);
+    FLOOR_SUB(op_latency);
+    FLOOR_SUB(rd_num);
+    FLOOR_SUB(rd_bytes);
+    FLOOR_SUB(rd_latency);
+    FLOOR_SUB(wr_num);
+    FLOOR_SUB(wr_bytes);
+    FLOOR_SUB(wr_latency);
+    FLOOR_SUB(recovered_objects);
+    FLOOR_SUB(recovered_bytes);
+    FLOOR_SUB(recovered_keys);
+  #undef FLOOR_SUB
+  }
+
+  void clear() {
+    memset(this, 0, sizeof(*this));
+  }
+
+  void dump(Formatter *f) const;
+  void encode(bufferlist &bl) const;
+  void decode(bufferlist::iterator &bl);
+  static void generate_test_instances(list<op_stat_t*>& o);
+};
+WRITE_CLASS_ENCODER(op_stat_t)
+
+struct perf_rate_t {
+  int64_t op_per_sec = 0;
+  int64_t op_read_per_sec = 0;
+  int64_t op_write_per_sec = 0;
+  int64_t op_latency = 0;
+  int64_t op_read_latency = 0;
+  int64_t op_write_latency = 0;
+  int64_t bytes_per_sec = 0;
+  int64_t bytes_read_per_sec = 0;
+  int64_t bytes_write_per_sec = 0;
+  int64_t recovered_objects_per_sec = 0;
+  int64_t recovered_bytes_per_sec = 0;
+  int64_t recovered_keys_per_sec = 0;
+
+  void dump(Formatter *f) const {
+    f->dump_int("op_per_sec", op_per_sec);
+    f->dump_int("op_read_per_sec", op_read_per_sec);
+    f->dump_int("op_write_per_sec", op_write_per_sec);
+    f->dump_int("op_latency", op_latency);
+    f->dump_int("op_read_latency", op_read_latency);
+    f->dump_int("op_write_latency", op_write_latency);
+    f->dump_int("bytes_per_sec", bytes_per_sec);
+    f->dump_int("bytes_read_per_sec", bytes_read_per_sec);
+    f->dump_int("bytes_write_per_sec", bytes_write_per_sec);
+    f->dump_int("recovered_objects_per_sec", recovered_objects_per_sec);
+    f->dump_int("recovered_bytes_per_sec", recovered_bytes_per_sec);
+    f->dump_int("recovered_keys_per_sec", recovered_keys_per_sec);
+  }
+};
+
+struct perf_stat_t {
+  string name;
+  utime_t last_update;
+  utime_t last_sample;
+  op_stat_t raw_data;
+  op_stat_t pre_data;
+
+  std::list<std::pair<op_stat_t, utime_t>> delta_list;
+  op_stat_t stat_deltas;
+  utime_t time_deltas;
+
+  perf_stat_t()
+    : name(""), raw_data(), stat_deltas(), time_deltas() {
+  }
+
+  perf_stat_t(string _name, op_stat_t _data = op_stat_t())
+    : name(_name), raw_data(_data), stat_deltas(), time_deltas() {
+      last_update = ceph_clock_now();
+  }
+
+  void update_stat(op_stat_t &inc_data) {
+    last_update = ceph_clock_now();
+    raw_data.add(inc_data);
+  }
+
+  void sample_delta() {
+    utime_t now = ceph_clock_now();
+    utime_t delta_time = now - last_sample;
+    op_stat_t cur_data = raw_data;
+    op_stat_t delta_data = cur_data;
+    delta_data.floor_sub(pre_data);
+
+    if (!last_sample.is_zero()) {
+      delta_list.push_back(make_pair(delta_data, delta_time));
+      stat_deltas.add(delta_data);
+      time_deltas += delta_time;
+      int64_t smooth_interval =
+        g_ceph_context->_conf->get_val<int64_t>("mgr_perf_smooth_time_interval");
+      while ((double)time_deltas > smooth_interval + 1) {
+        stat_deltas.floor_sub(delta_list.front().first);
+        time_deltas -= delta_list.front().second;
+        delta_list.pop_front();
+      }
+    }
+
+    pre_data = cur_data;
+    last_sample = now;
+  }
+
+  perf_rate_t get_overall_rate() const {
+    perf_rate_t rate;
+    bool in_us = g_ceph_context->_conf->get_val<bool>("mgr_op_latency_in_us");
+    int64_t unit = in_us ? 1000 : 1000000;
+    double duration = std::max((double)time_deltas, 1.0);
+
+    rate.op_per_sec = stat_deltas.op_num / duration;
+    rate.op_read_per_sec = stat_deltas.rd_num / duration;
+    rate.op_write_per_sec = stat_deltas.wr_num / duration;
+    rate.op_latency = stat_deltas.op_num == 0 ? 0 :
+      (stat_deltas.op_latency / stat_deltas.op_num + unit / 2) / unit;
+    rate.op_read_latency = stat_deltas.rd_num == 0 ? 0 :
+      (stat_deltas.rd_latency / stat_deltas.rd_num + unit / 2) / unit;
+    rate.op_write_latency = stat_deltas.wr_num == 0 ? 0 :
+      (stat_deltas.wr_latency / stat_deltas.wr_num + unit / 2) / unit;
+    rate.bytes_per_sec = stat_deltas.op_bytes / duration;
+    rate.bytes_read_per_sec = stat_deltas.rd_bytes / duration;
+    rate.bytes_write_per_sec = stat_deltas.wr_bytes / duration;
+    rate.recovered_objects_per_sec = stat_deltas.recovered_objects / duration;
+    rate.recovered_bytes_per_sec = stat_deltas.recovered_bytes / duration;
+    rate.recovered_keys_per_sec = stat_deltas.recovered_keys / duration;
+
+    if (rate.op_read_per_sec == 0 && rate.bytes_read_per_sec == 0) {
+      rate.op_read_latency = 0;
+    }
+    if (rate.op_write_per_sec == 0 && rate.bytes_write_per_sec == 0) {
+      rate.op_write_latency = 0;
+    }
+    if (rate.op_per_sec == 0 && rate.bytes_per_sec == 0) {
+      rate.op_latency = 0;
+    }
+
+    return rate;
+  }
+
+  void dump_deltas(Formatter *f) const {
+    std::stringstream oss;
+    bool in_us = g_ceph_context->_conf->get_val<bool>("mgr_op_latency_in_us");
+    int64_t unit = in_us ? 1000 : 1000000;
+    double duration = time_deltas;
+
+    oss << duration;
+    f->open_object_section("deltas");
+    f->dump_format(oss.str().c_str(),
+      "%6lu,%6lu,%6lu|%9lu,%9lu,%9lu|%9lu,%9lu,%9lu|%6lu,%9lu,%6lu",
+      stat_deltas.op_num,
+      stat_deltas.rd_num,
+      stat_deltas.wr_num,
+      (stat_deltas.op_latency + unit / 2) / unit,
+      (stat_deltas.rd_latency + unit / 2) / unit,
+      (stat_deltas.wr_latency + unit / 2) / unit,
+      stat_deltas.op_bytes,
+      stat_deltas.rd_bytes,
+      stat_deltas.wr_bytes,
+      stat_deltas.recovered_objects,
+      stat_deltas.recovered_bytes,
+      stat_deltas.recovered_keys);
+    for (auto &dl : delta_list) {
+      std::stringstream delta_t;
+      delta_t << (double)dl.second;
+      f->dump_format(delta_t.str().c_str(),
+        "%6lu,%6lu,%6lu|%9lu,%9lu,%9lu|%9lu,%9lu,%9lu|%6lu,%9lu,%6lu",
+        dl.first.op_num,
+        dl.first.rd_num,
+        dl.first.wr_num,
+        (dl.first.op_latency + unit / 2) / unit,
+        (dl.first.rd_latency + unit / 2) / unit,
+        (dl.first.wr_latency + unit / 2) / unit,
+        dl.first.op_bytes,
+        dl.first.rd_bytes,
+        dl.first.wr_bytes,
+        dl.first.recovered_objects,
+        dl.first.recovered_bytes,
+        dl.first.recovered_keys);
+    }
+    f->close_section();
+  }
+};
 
 /*
  * summation over an entire pool
@@ -5305,6 +5536,87 @@ struct obj_list_snap_response_t {
 };
 
 WRITE_CLASS_ENCODER(obj_list_snap_response_t)
+
+/*
+ * dmClock-based QoS Control
+ */
+struct dmc_qos_spec {
+  uint64_t reservation;
+  uint64_t weight;
+  uint64_t limit;
+  uint64_t bandwidth;
+  uint32_t version;      // for qos update online
+
+  dmc_qos_spec(
+    uint64_t _reserv = -1ULL,
+    uint64_t _weight = -1ULL,
+    uint64_t _limit  = -1ULL,
+    uint64_t _bandwd = -1ULL,
+    uint32_t _version = 0)
+    : reservation(_reserv),
+      weight(_weight),
+      limit(_limit),
+      bandwidth(_bandwd),
+      version(_version) {
+    }
+
+  dmc_qos_spec(const dmc_qos_spec &other)
+    : dmc_qos_spec(other.reservation,
+                   other.weight,
+                   other.limit,
+                   other.bandwidth,
+                   other.version) {
+  }
+
+  void encode(bufferlist &bl) const {
+    ENCODE_START(2, 1, bl);
+    ::encode(reservation, bl);
+    ::encode(weight, bl);
+    ::encode(limit, bl);
+    ::encode(bandwidth, bl);
+    ::encode(version, bl);
+    ENCODE_FINISH(bl);
+  }
+
+  void decode(bufferlist::iterator &p) {
+    DECODE_START(2, p);
+    ::decode(reservation, p);
+    ::decode(weight, p);
+    ::decode(limit, p);
+    ::decode(bandwidth, p);
+    if (struct_v >= 2) {
+      ::decode(version, p);
+    }
+    DECODE_FINISH(p);
+  }
+
+  bool valid() const {
+    return reservation != -1ULL && weight != -1ULL
+           && limit != -1ULL && bandwidth != -1ULL
+           && !(reservation == 0 && weight == 0);
+  }
+
+  bool unchanged(const dmc_qos_spec &other) const {
+    // ignore version intentionally
+    return reservation  == other.reservation
+           && weight    == other.weight
+           && limit     == other.limit
+           && bandwidth == other.bandwidth;
+  }
+
+  void assign_qos(const dmc_qos_spec &other) {
+    // ignore version intentionally
+    reservation = other.reservation;
+    weight      = other.weight;
+    limit       = other.limit;
+    bandwidth   = other.bandwidth;
+  }
+
+  void inc_version() {
+    ++version;
+  }
+};
+WRITE_CLASS_ENCODER(dmc_qos_spec)
 
 // PromoteCounter
 

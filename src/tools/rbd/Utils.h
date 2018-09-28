@@ -177,17 +177,17 @@ int init_io_ctx(librados::Rados &rados, const std::string &pool_name,
                 librados::IoCtx *io_ctx);
 
 int open_image(librados::IoCtx &io_ctx, const std::string &image_name,
-               bool read_only, librbd::Image *image);
+               bool read_only, librbd::Image *image, bool bench = false);
 
 int open_image_by_id(librados::IoCtx &io_ctx, const std::string &image_id,
-                     bool read_only, librbd::Image *image);
+                     bool read_only, librbd::Image *image, bool bench = false);
 
 int init_and_open_image(const std::string &pool_name,
                         const std::string &image_name,
                         const std::string &image_id,
                         const std::string &snap_name, bool read_only,
                         librados::Rados *rados, librados::IoCtx *io_ctx,
-                        librbd::Image *image);
+                        librbd::Image *image, bool bench = false);
 
 int snap_set(librbd::Image &image, const std::string &snap_name);
 

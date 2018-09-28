@@ -1605,6 +1605,14 @@ std::vector<Option> get_global_options() {
     .set_default(false)
     .set_description(""),
 
+    Option("objecter_requests_tracker_history_size", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(64)
+    .set_description(""),
+
+    Option("objecter_dmc_op_cost_from_rados", Option::TYPE_BOOL, Option::LEVEL_DEV)
+    .set_default(false)
+    .set_description(""),
+
     Option("objecter_debug_inject_relock_delay", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
@@ -1978,7 +1986,7 @@ std::vector<Option> get_global_options() {
     .set_description(""),
 
     Option("osd_op_num_shards", Option::TYPE_INT, Option::LEVEL_ADVANCED)
-    .set_default(0)
+    .set_default(5)
     .set_description(""),
 
     Option("osd_op_num_shards_hdd", Option::TYPE_INT, Option::LEVEL_ADVANCED)
@@ -1998,8 +2006,8 @@ std::vector<Option> get_global_options() {
     .set_description("Do not trust stored data_digest (due to previous bug or corruption)"),
 
     Option("osd_op_queue", Option::TYPE_STR, Option::LEVEL_ADVANCED)
-    .set_default("wpq")
-    .set_enum_allowed( { "wpq", "prioritized", "mclock_opclass", "mclock_client", "debug_random" } )
+    .set_default("dmc")
+    .set_enum_allowed( { "wpq", "prioritized", "mclock_opclass", "mclock_client", "dmc", "debug_random" } )
     .set_description("which operation queue algorithm to use")
     .set_long_description("which operation queue algorithm to use; mclock_opclass and mclock_client are currently experimental")
     .add_see_also("osd_op_queue_cut_off"),
@@ -2479,6 +2487,10 @@ std::vector<Option> get_global_options() {
     .set_default(0)
     .set_description(""),
 
+    Option("osd_recovery_max_active_baseline", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(3)
+    .set_description(""),
+
     Option("osd_recovery_max_active", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(3)
     .set_description(""),
@@ -2505,6 +2517,63 @@ std::vector<Option> get_global_options() {
 
     Option("osd_max_push_cost", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(8<<20)
+    .set_description(""),
+
+    Option("osd_dmc_queue_spec_clientop", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
+    .set_description(""),
+
+    Option("osd_dmc_queue_spec_subop", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
+    .set_description(""),
+
+    Option("osd_dmc_queue_spec_pullpush", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,20M")
+    .set_description(""),
+
+    Option("osd_dmc_queue_spec_snaptrim", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
+    .set_description(""),
+
+    Option("osd_dmc_queue_spec_recovery", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
+    .set_description(""),
+
+    Option("osd_dmc_queue_spec_scrub", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
+    .set_description(""),
+
+    Option("osd_dmc_queue_enable_pullpush", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(true)
+    .set_description(""),
+
+    Option("osd_load_balancer_enabled", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(true)
+    .set_description(""),
+
+    Option("osd_load_balancer_op_priority_mode", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("default")
+    .set_enum_allowed({"default", "client_op_prioritized", "recovery_op_prioritized"})
+    .set_description(""),
+
+    Option("osd_load_balancer_client_op_white_noise_filter", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(2)
+    .set_description(""),
+
+    Option("osd_load_balancer_recovery_op_white_noise_filter", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(0)
+    .set_description(""),
+
+    Option("osd_load_balancer_idle_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(5)
+    .set_description(""),
+
+    Option("osd_load_balancer_spec_default", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,20M")
+    .set_description(""),
+
+    Option("osd_load_balancer_spec_unlimited", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("0,100,0,0")
     .set_description(""),
 
     Option("osd_max_push_objects", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
@@ -2887,6 +2956,10 @@ std::vector<Option> get_global_options() {
 
     Option("threadpool_empty_queue_max_wait", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(2)
+    .set_description(""),
+
+    Option("threadpool_dmc_queue_poll_delay", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.001)
     .set_description(""),
 
     Option("leveldb_log_to_ceph_log", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
@@ -4382,7 +4455,52 @@ std::vector<Option> get_global_options() {
     Option("debug_asserts_on_shutdown", Option::TYPE_BOOL,Option::LEVEL_DEV)
     .set_default(false)
     .set_description("Enable certain asserts to check for refcounting bugs on shutdown; see http://tracker.ceph.com/issues/21738"),
-  });
+
+    Option("mgr_mark_pg_stale_delay", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(5.0)
+    .set_description(""),
+
+    Option("mgr_op_latency_in_us", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(true)
+    .set_description(""),
+
+    Option("mgr_image_idle_to_clean_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(600)
+    .set_description(""),
+
+    Option("mgr_perf_smooth_time_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(30)
+    .set_min(5)
+    .set_description(""),
+
+    Option("mgr_recovery_balancer_min_objects", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(500)
+    .set_description("for single osd, enable adjustment unless there are at least these many objects to recover"),
+
+    Option("mgr_recovery_balancer_min_adjustment_factor", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(.5)
+    .set_description(""),
+
+    Option("mgr_recovery_balancer_max_adjustment_factor", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(2.0)
+    .set_description(""),
+
+    Option("mgr_recovery_balancer_do_aggressive_adjustment", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(true)
+    .set_description("switch to a more aggressive (e.g., use bigger adjustment factor) adjustment mode when enabled"),
+
+    Option("mgr_recovery_balancer_min_aggressive_osds", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(2)
+    .set_description("minimal OSDs to unconditionally enable aggressive mode"),
+
+    Option("mgr_recovery_balancer_max_aggressive_adjustment_factor", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(5.0)
+    .set_description("a more excessive adjustment factor to apply when appropriate"),
+
+    Option("mgr_recovery_balancer_min_diff", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(.01)
+    .set_description("minimal differece to trigger a adjustment"),
+ });
 }
 
 std::vector<Option> get_rgw_options() {
@@ -5873,6 +5991,10 @@ static std::vector<Option> get_rbd_options() {
     .set_default(false)
     .set_description("create a blkin trace for all RBD requests"),
 
+    Option("rbd_perf_report_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(5.0)
+    .set_description(""),
+
     Option("rbd_validate_pool", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
     .set_description("validate empty pools for RBD compatibility"),
@@ -5945,6 +6067,22 @@ static std::vector<Option> get_rbd_options() {
     Option("rbd_journal_max_payload_bytes", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(16384)
     .set_description("maximum journal payload size before splitting"),
+
+    Option("rbd_client_qos_reservation", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(0)
+    .set_description(""),
+  
+    Option("rbd_client_qos_weight", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(100)
+    .set_description(""),
+  
+    Option("rbd_client_qos_limit", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(0)
+    .set_description(""),
+  
+    Option("rbd_client_qos_bandwidth", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(0)
+    .set_description(""),
 
     Option("rbd_journal_max_concurrent_object_sets", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)
