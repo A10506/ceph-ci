@@ -3942,11 +3942,21 @@ struct pg_missing_item {
   enum missing_flags_t {
     FLAG_NONE = 0,
     FLAG_DELETE = 1,
-  } flags;
+    FLAG_DIRTY_DESC = 2,
+  };
+  int flags;
+  ObjectDirtyDesc dirty_desc;
   pg_missing_item() : flags(FLAG_NONE) {}
   explicit pg_missing_item(eversion_t n) : need(n), flags(FLAG_NONE) {}  // have no old version
   pg_missing_item(eversion_t n, eversion_t h, bool is_delete=false) : need(n), have(h) {
     set_delete(is_delete);
+  }
+  pg_missing_item(eversion_t n, eversion_t h,
+                  bool is_delete, const ObjectDirtyDesc& dd) :
+    need(n), have(h), dirty_desc(dd) {
+    set_delete(is_delete);
+    if (dirty_desc.is_valid())
+      set_dirty_desc();
   }
 
   void encode(bufferlist& bl, uint64_t features) const {
@@ -3961,6 +3971,8 @@ struct pg_missing_item {
       encode(need, bl);
       encode(have, bl);
       encode(static_cast<uint8_t>(flags), bl);
+      if (has_dirty_desc())
+        encode(dirty_desc, bl);
     } else {
       // legacy unversioned encoding
       encode(need, bl);
@@ -3980,12 +3992,40 @@ struct pg_missing_item {
       decode(have, bl);
       uint8_t f;
       decode(f, bl);
-      flags = static_cast<missing_flags_t>(f);
+      flags = static_cast<int>(f);
+      if (has_dirty_desc())
+        decode(dirty_desc, bl);
+      else
+        dirty_desc.invalidate();
     }
   }
 
+  void set_dirty_desc() {
+    flags |= FLAG_DIRTY_DESC;
+  }
+
+  const ObjectDirtyDesc& get_dirty_desc() const {
+    return dirty_desc;
+  }
+
+  bool has_dirty_desc() const {
+    return (flags & FLAG_DIRTY_DESC) == FLAG_DIRTY_DESC;
+  }
+
+  void merge_dirty_desc(const ObjectDirtyDesc& dd) {
+    dirty_desc.merge(dd);
+  }
+
+  void invalidate_dirty_desc() {
+    dirty_desc.invalidate();
+  }
+
   void set_delete(bool is_delete) {
-    flags = is_delete ? FLAG_DELETE : FLAG_NONE;
+    if (is_delete) {
+      flags |= FLAG_DELETE;
+    } else {
+      flags &= ~FLAG_DELETE;
+    }
   }
 
   bool is_delete() const {
@@ -3996,7 +4036,16 @@ struct pg_missing_item {
     if (flags == FLAG_NONE) {
       return "none";
     } else {
-      return "delete";
+      string s;
+      if (is_delete()) {
+        s = "delete";
+      }
+      if (has_dirty_desc()) {
+        if (s.length())
+          s += '+';
+        s += "dirty_desc";
+      }
+      return s;
     }
   }
 
@@ -4004,6 +4053,7 @@ struct pg_missing_item {
     f->dump_stream("need") << need;
     f->dump_stream("have") << have;
     f->dump_stream("flags") << flag_str();
+    f->dump_stream("dirty_desc") << dirty_desc;
   }
   static void generate_test_instances(list<pg_missing_item*>& o) {
     o.push_back(new pg_missing_item);
@@ -4160,20 +4210,26 @@ public:
       rmissing.erase((missing_it->second).need.version);
       (missing_it->second).need = e.version;  // leave .have unchanged.
       missing_it->second.set_delete(e.is_delete());
+      missing_it->second.merge_dirty_desc(e.dirty_desc);
     } else {
       // not missing, we must have prior_version (if any)
       ceph_assert(!is_missing_divergent_item);
-      missing[e.soid] = item(e.version, e.prior_version, e.is_delete());
+      missing[e.soid] = item(e.version,
+                             e.prior_version,
+                             e.is_delete(),
+                             e.dirty_desc);
     }
     rmissing[e.version.version] = e.soid;
     tracker.changed(e.soid);
   }
 
   void revise_need(hobject_t oid, eversion_t need, bool is_delete) {
-    if (missing.count(oid)) {
-      rmissing.erase(missing[oid].need.version);
-      missing[oid].need = need;            // no not adjust .have
-      missing[oid].set_delete(is_delete);
+    auto it = missing.find(oid);
+    if (it != missing.end()) {
+      rmissing.erase(it->second.need.version);
+      it->second.need = need;            // do not adjust .have
+      it->second.set_delete(is_delete);
+      it->second.invalidate_dirty_desc();
     } else {
       missing[oid] = item(need, eversion_t(), is_delete);
     }
@@ -4192,6 +4248,13 @@ public:
   void add(const hobject_t& oid, eversion_t need, eversion_t have,
 	   bool is_delete) {
     missing[oid] = item(need, have, is_delete);
+    rmissing[need.version] = oid;
+    tracker.changed(oid);
+  }
+
+  void add(const hobject_t& oid, eversion_t need, eversion_t have,
+           bool is_delete, const ObjectDirtyDesc& dd) {
+    missing[oid] = item(need, have, is_delete, dd);
     rmissing[need.version] = oid;
     tracker.changed(oid);
   }
@@ -4232,7 +4295,7 @@ public:
       ) {
       if ((i->first.get_hash() & mask) == child_pgid.m_seed) {
 	omissing->add(i->first, i->second.need, i->second.have,
-		      i->second.is_delete());
+		      i->second.is_delete(), i->second.dirty_desc);
 	rm(i++);
       } else {
 	++i;
