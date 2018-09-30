@@ -427,7 +427,7 @@ void PGMapDigest::recovery_rate_summary(Formatter *f, ostream *out,
     f->dump_int("num_keys_recovered", pos_delta.stats.sum.num_keys_recovered);
   } else {
     if (bps)
-      *out << byte_u_t(bps) << "B/s";
+      *out << byte_u_t(bps) << "/s";
     if (kps)
       *out << ", " << si_u_t(kps) << "keys/s";
     if (ops)
@@ -490,11 +490,11 @@ void PGMapDigest::client_io_rate_summary(Formatter *f, ostream *out,
     f->dump_int("write_op_per_sec", iops_wr);
   } else {
     if (rd)
-      *out << byte_u_t(rd) << "B/s rd";
+      *out << byte_u_t(rd) << "/s rd";
     if (wr) {
       if (rd)
         *out << ", ";
-      *out << byte_u_t(wr) << "B/s wr";
+      *out << byte_u_t(wr) << "/s wr";
     }
     if (iops_rd)
       *out << ", " << si_u_t(iops_rd) << "op/s rd";
