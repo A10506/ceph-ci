@@ -2315,6 +2315,10 @@ will start to track new ops received afterwards.";
     f->open_object_section("compact_result");
     f->dump_float("elapsed_time", time_span.count());
     f->close_section();
+  } else if (admin_command == "pg_delete_stop") {
+    remove_tp.stop();
+  } else if (admin_command == "pg_delete_start") {
+    remove_tp.start();
   } else {
     assert(0 == "broken asok registration");
   }
@@ -2896,6 +2900,14 @@ void OSD::final_init()
 				     "Commpact object store's omap."
                                      " WARNING: Compaction probably slows your requests");
   assert(r == 0);
+  r = admin_socket->register_command("pg_delete_stop", "pg_delete_stop",
+                                     asok_hook,
+                                     "Stop pg removal");
+  assert(r == 0);
+  r = admin_socket->register_command("pg_delete_start", "pg_delete_start",
+                                     asok_hook,
+                                     "Start pg removal");
+  assert(r == 0);
 
   test_ops_hook = new TestOpsSocketHook(&(this->service), this->store);
   // Note: pools are CephString instead of CephPoolname because
@@ -3402,6 +3414,8 @@ int OSD::shutdown()
   cct->get_admin_socket()->unregister_command("set_recovery_delay");
   cct->get_admin_socket()->unregister_command("trigger_scrub");
   cct->get_admin_socket()->unregister_command("injectfull");
+  cct->get_admin_socket()->unregister_command("pg_delete_stop");
+  cct->get_admin_socket()->unregister_command("pg_delete_start");
   delete test_ops_hook;
   test_ops_hook = NULL;
 
