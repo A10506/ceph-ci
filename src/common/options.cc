@@ -5893,7 +5893,7 @@ static std::vector<Option> get_rbd_options() {
     .set_description("process AIO ops from a dispatch thread to prevent blocking"),
 
     Option("rbd_cache", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
-    .set_default(true)
+    .set_default(false)
     .set_description("whether to enable caching (writeback unless rbd_cache_max_dirty is 0)"),
 
     Option("rbd_cache_writethrough_until_flush", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
