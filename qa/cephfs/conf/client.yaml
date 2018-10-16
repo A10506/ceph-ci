@@ -3,5 +3,5 @@ overrides:
     conf:
       client:
         client mount timeout: 600
-        debug ms: 1
+        debug ms: 20
         debug client: 20

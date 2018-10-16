@@ -3,7 +3,7 @@ overrides:
     conf:
       mds:
         debug mds: 20
-        debug ms: 1
+        debug ms: 20
         mds debug frag: true
         mds debug scatterstat: true
         mds op complaint time: 180
