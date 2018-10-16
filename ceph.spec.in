@@ -303,6 +303,9 @@ Requires:      xfsprogs
 Requires:      which
 %if 0%{?fedora} || 0%{?rhel}
 Requires:      gdisk
+%if 0%{with tcmalloc}
+Requires:      gperftools-libs >= 2.6.1
+%endif
 %endif
 %if 0%{?suse_version}
 Recommends:    chrony
