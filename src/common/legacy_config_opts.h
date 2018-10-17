@@ -671,6 +671,9 @@ OPTION(osd_read_ec_check_for_errors, OPT_BOOL) // return error if any ec shard h
 // Only use clone_overlap for recovery if there are fewer than
 // osd_recover_clone_overlap_limit entries in the overlap set
 OPTION(osd_recover_clone_overlap_limit, OPT_INT)
+// Only use dirty_ranges for recovery if there are fewer than
+// osd_recover_dirty_ranges_limit entries in the dirty_ranges set of dirty_desc
+OPTION(osd_recover_dirty_ranges_limit, OPT_INT)
 
 OPTION(osd_backfill_scan_min, OPT_INT)
 OPTION(osd_backfill_scan_max, OPT_INT)

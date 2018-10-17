@@ -1136,6 +1136,33 @@ void ReplicatedBackend::calc_head_subsets(
   if (size)
     data_subset.insert(0, size);
 
+  pg_missing_item pm;
+  missing.is_missing(head, &pm);
+  auto dirty_desc = pm.get_dirty_desc();
+  if (dirty_desc.is_valid()) {
+    if (dirty_desc.is_data_dirty()) {
+      data_subset.intersection_of(dirty_desc.get_dirty_ranges());
+      dout(10) << __func__ << " dirty data_subset " << data_subset << dendl;
+      if (data_subset.num_intervals() >
+          cct->_conf->osd_recover_dirty_ranges_limit) {
+        dout(10) << __func__ << " skipping dirty_ranges, too many holes"
+                 << dendl;
+        data_subset.clear();
+        data_subset.insert(0, size);
+        // continue to check if clone_overlap is applicable
+      } else {
+        ceph_assert(data_subset.empty() ||
+                    data_subset.range_end() <= size);
+        return;
+      }
+    } else {
+      // FIXME
+      // data_subset.clear();
+      // dout(10) << __func__ << " data is not dirty" << dendl;
+      // return;
+    }
+  }
+
   if (get_parent()->get_pool().allow_incomplete_clones()) {
     dout(10) << __func__ << ": caching (was) enabled, skipping clone subsets" << dendl;
     return;
