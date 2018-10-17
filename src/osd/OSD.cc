@@ -894,9 +894,31 @@ void OSDService::set_injectfull(s_names type, int64_t count)
 
 void OSDService::set_statfs(const struct store_statfs_t &stbuf)
 {
-  uint64_t bytes = stbuf.total;
-  uint64_t used = bytes - stbuf.available;
-  uint64_t avail = stbuf.available;
+  uint64_t total = stbuf.total;
+  uint64_t available = stbuf.available;
+
+  // For testing fake statfs values so it doesn't matter if all
+  // OSDs are using the same partition.
+  if (cct->_conf->fake_statfs_for_testing) {
+    uint64_t total_num_bytes = 0;
+    vector<PGRef> pgs;
+    osd->_get_pgs(&pgs);
+    for (auto p : pgs) {
+      total_num_bytes += p->get_stats_num_bytes();
+    }
+    total = cct->_conf->fake_statfs_for_testing;
+    if (total_num_bytes < total)
+      available = total - total_num_bytes;
+    else
+      available = 0;
+    dout(0) << __func__ << " fake total " << cct->_conf->fake_statfs_for_testing
+            << " adjust available " << available
+            << dendl;
+  }
+
+  uint64_t bytes = total;
+  uint64_t used = bytes - available;
+  uint64_t avail = available;
 
   osd->logger->set(l_osd_stat_bytes, bytes);
   osd->logger->set(l_osd_stat_bytes_used, used);
