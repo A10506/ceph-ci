@@ -171,6 +171,24 @@ int TestRadosClient::mon_command(const std::vector<std::string>& cmd,
   return -ENOSYS;
 }
 
+int TestRadosClient::mgr_command(const std::vector<std::string>& cmd,
+                                 const bufferlist &inbl,
+                                 bufferlist *outbl, std::string *outs) {
+  for (std::vector<std::string>::const_iterator it = cmd.begin();
+       it != cmd.end(); ++it) {
+    JSONParser parser;
+    if (!parser.parse(it->c_str(), it->length())) {
+      return -EINVAL;
+    }
+
+    JSONObjIter j_it = parser.find("prefix");
+    if (j_it.end()) {
+      return -EINVAL;
+    }
+  }
+  return -ENOSYS;
+}
+
 void TestRadosClient::add_aio_operation(const std::string& oid,
                                         bool queue_callback,
 				        const AioFunction &aio_function,

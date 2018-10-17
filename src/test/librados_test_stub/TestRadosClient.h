@@ -75,6 +75,10 @@ public:
                           const bufferlist &inbl,
                           bufferlist *outbl, std::string *outs);
 
+  virtual int mgr_command(const std::vector<std::string>& cmd,
+                          const bufferlist &inbl,
+                          bufferlist *outbl, std::string *outs);
+
   virtual void object_list(int64_t pool_id,
 			   std::list<librados::TestRadosClient::Object> *list) = 0;
 
