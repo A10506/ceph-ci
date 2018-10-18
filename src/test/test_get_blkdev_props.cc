@@ -8,6 +8,7 @@
 #include <inttypes.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include "include/scope_guard.h"
 #include "include/uuid.h"
 #include "common/blkdev.h"
 
@@ -36,6 +37,9 @@ int main(int argc, char **argv)
     perror("open");
     return -1;
   }
+  auto close_fd = make_scope_guard([fd] {
+    ::close(fd);
+  });
 
   BlkDev blkdev(fd);
 
