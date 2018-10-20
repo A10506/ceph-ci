@@ -62,7 +62,7 @@ int EpollDriver::add_event(int fd, int cur_mask, int add_mask)
   int op;
   op = cur_mask == EVENT_NONE ? EPOLL_CTL_ADD: EPOLL_CTL_MOD;
 
-  ee.events = EPOLLET;
+  ee.events = 0;
   add_mask |= cur_mask; /* Merge old events */
   if (add_mask & EVENT_READABLE)
     ee.events |= EPOLLIN;
