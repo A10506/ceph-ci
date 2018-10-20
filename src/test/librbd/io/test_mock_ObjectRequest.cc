@@ -418,6 +418,10 @@ TEST_F(TestMockIoObjectRequest, CacheRead) {
     mock_image_ctx.object_map = &mock_object_map;
   }
 
+  if (!ictx->cache) {
+    return;
+  }
+
   expect_op_work_queue(mock_image_ctx);
 
   InSequence seq;
@@ -441,6 +445,10 @@ TEST_F(TestMockIoObjectRequest, CacheReadError) {
   MockObjectMap mock_object_map;
   if (ictx->test_features(RBD_FEATURE_OBJECT_MAP)) {
     mock_image_ctx.object_map = &mock_object_map;
+  }
+
+  if (!ictx->cache) {
+    return;
   }
 
   expect_op_work_queue(mock_image_ctx);
