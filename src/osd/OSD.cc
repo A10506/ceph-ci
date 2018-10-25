@@ -10202,8 +10202,32 @@ void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb)
 
   // peek at spg_t
   sdata->shard_lock.Lock();
-  if (sdata->pqueue->empty() &&
-     !(is_smallest_thread_index && !sdata->context_queue.empty())) {
+  if (is_smallest_thread_index && sdata->pqueue->empty()) {
+    sdata->sdata_wait_lock.Lock(); //check context_queue.empty by this lock.
+    if (sdata->context_queue.empty()) {
+      if (!sdata->stop_waiting) {
+	dout(20) << __func__ << " empty q, waiting" << dendl;
+	osd->cct->get_heartbeat_map()->clear_timeout(hb);
+	sdata->shard_lock.Unlock();
+	sdata->sdata_cond.Wait(sdata->sdata_wait_lock);
+	sdata->sdata_wait_lock.Unlock();
+	sdata->shard_lock.Lock();
+	if (sdata->pqueue->empty() && sdata->context_queue.empty()) {
+	  sdata->shard_lock.Unlock();
+	  return;
+	}
+	osd->cct->get_heartbeat_map()->reset_timeout(hb,
+	    osd->cct->_conf->threadpool_default_timeout, 0);
+      } else {
+	dout(20) << __func__ << " need return immediately" << dendl;
+	sdata->sdata_wait_lock.Unlock();
+	sdata->shard_lock.Unlock();
+	return;
+      }
+    } else {
+      sdata->sdata_wait_lock.Unlock();
+    }
+  } else if (sdata->pqueue->empty()) {
     sdata->sdata_wait_lock.Lock();
     if (!sdata->stop_waiting) {
       dout(20) << __func__ << " empty q, waiting" << dendl;
@@ -10212,8 +10236,7 @@ void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb)
       sdata->sdata_cond.Wait(sdata->sdata_wait_lock);
       sdata->sdata_wait_lock.Unlock();
       sdata->shard_lock.Lock();
-      if (sdata->pqueue->empty() &&
-         !(is_smallest_thread_index && !sdata->context_queue.empty())) {
+      if (sdata->pqueue->empty()) {
 	sdata->shard_lock.Unlock();
 	return;
       }
