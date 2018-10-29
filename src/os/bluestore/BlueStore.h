@@ -461,15 +461,19 @@ public:
       sb->coll = coll;
     }
 
-    void remove(SharedBlob *sb) {
+    bool remove(SharedBlob *sb, bool verify_nref_is_zero=false) {
       std::lock_guard l(lock);
       ceph_assert(sb->get_parent() == this);
+      if (verify_nref_is_zero && sb->nref != 0) {
+	return false;
+      }
       // only remove if it still points to us
       auto p = sb_map.find(sb->get_sbid());
       if (p != sb_map.end() &&
 	  p->second == sb) {
 	sb_map.erase(p);
       }
+      return true;
     }
 
     bool empty() {
@@ -2128,6 +2132,15 @@ private:
   // its initialization (and outside of _open_bdev)
   void _validate_bdev();
   void _close_bdev();
+
+  int _open_bluefs(bool create);
+  void _close_bluefs();
+
+  // Limited (u)mount intended for BlueFS operations only
+  int _mount_for_bluefs();
+  void _umount_for_bluefs();
+
+
   /*
    * @warning to_repair_db means that we open this db to repair it, will not
    * hold the rocksdb's file lock.
@@ -2379,6 +2392,13 @@ public:
     f->close_section();
   }
 
+  int add_new_bluefs_device(int id, const string& path);
+  int migrate_to_existing_bluefs_device(const set<int>& devs_source,
+    int id);
+  int migrate_to_new_bluefs_device(const set<int>& devs_source,
+    int id,
+    const string& path);
+
 public:
   int statfs(struct store_statfs_t *buf) override;
 
@@ -2551,6 +2571,8 @@ public:
   bool has_builtin_csum() const override {
     return true;
   }
+
+  int allocate_bluefs_freespace(uint64_t size);
 
 private:
   bool _debug_data_eio(const ghobject_t& o) {

@@ -182,8 +182,7 @@ class DaemonState
     }
   }
 
-  const std::map<std::string,std::string>& get_config_defaults() {
-    std::lock_guard l(lock);
+  const std::map<std::string,std::string>& _get_config_defaults() {
     if (config_defaults.empty() &&
 	config_defaults_bl.length()) {
       auto p = config_defaults_bl.cbegin();
@@ -337,7 +336,6 @@ public:
 			     std::set<std::string> *ls) {
     auto m = get_by_server(server);
     for (auto& i : m) {
-      Mutex::Locker l(i.second->lock);
       for (auto& j : i.second->devices) {
 	ls->insert(j.first);
       }
