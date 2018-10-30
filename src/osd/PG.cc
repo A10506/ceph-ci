@@ -7666,8 +7666,6 @@ PG::RecoveryState::RepNotRecovering::react(const RequestBackfillPrio &evt)
                        << " pending_adjustments " << pending_adjustment << "KiB"
                        << dendl;
   }
-  // Use un-ec-adjusted bytes for stats.
-  pg->info.stats.stats.sum.num_bytes = evt.local_num_bytes;
   // This lock protects not only the stats OSDService but also setting the pg primary_num_bytes
   // That's why we don't immediately unlock
   Mutex::Locker l(pg->osd->stat_lock);
@@ -7693,7 +7691,7 @@ PG::RecoveryState::RepNotRecovering::react(const RequestBackfillPrio &evt)
     else
       pg->clear_reserved_num_bytes();
     // Use un-ec-adjusted bytes for stats.
-    //pg->info.stats.stats.sum.num_bytes = evt.local_num_bytes;
+    pg->info.stats.stats.sum.num_bytes = evt.local_num_bytes;
     if (HAVE_FEATURE(pg->upacting_features, RECOVERY_RESERVATION_2)) {
       // older peers will interpret preemption as TOOFULL
       preempt = new QueuePeeringEvt<RemoteBackfillPreempted>(
