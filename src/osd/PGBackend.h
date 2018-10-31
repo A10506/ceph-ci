@@ -228,6 +228,7 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
        const hobject_t &hoid) = 0;
 
      virtual bool pg_is_undersized() const = 0;
+     virtual bool pg_is_backfilling() const = 0;
 
      virtual void log_operation(
        const vector<pg_log_entry_t> &logv,
@@ -296,6 +297,10 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
 
      virtual bool check_osdmap_full(const set<pg_shard_t> &missing_on) = 0;
 
+     virtual void pg_add_local_num_bytes(int64_t num_bytes) = 0;
+     virtual void pg_sub_local_num_bytes(int64_t num_bytes) = 0;
+     virtual void pg_add_num_bytes(int64_t num_bytes) = 0;
+     virtual void pg_sub_num_bytes(int64_t num_bytes) = 0;
      virtual bool maybe_preempt_replica_scrub(const hobject_t& oid) = 0;
      virtual ~Listener() {}
    };
@@ -407,6 +412,8 @@ typedef std::shared_ptr<const OSDMap> OSDMapRef;
 
    virtual IsPGRecoverablePredicate *get_is_recoverable_predicate() const = 0;
    virtual IsPGReadablePredicate *get_is_readable_predicate() const = 0;
+   virtual int get_ec_data_chunk_count() const { return 0; };
+   virtual int get_ec_stripe_chunk_size() const { return 0; };
 
    virtual void dump_recovery_info(Formatter *f) const = 0;
 
