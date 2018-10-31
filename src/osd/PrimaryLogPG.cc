@@ -4455,9 +4455,7 @@ int PrimaryLogPG::trim_object(
 
     coi.prior_version = coi.version;
     coi.version = ctx->at_version;
-    bl.clear();
-    encode(coi, bl, get_osdmap()->get_features(CEPH_ENTITY_TYPE_OSD, nullptr));
-    t->setattr(coid, OI_ATTR, bl);
+    t->nop(coid);
 
     ctx->log.push_back(
       pg_log_entry_t(
