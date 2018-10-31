@@ -7740,6 +7740,8 @@ void PG::RecoveryState::RepWaitBackfillReserved::exit()
 {
   context< RecoveryMachine >().log_exit(state_name, enter_time);
   PG *pg = context< RecoveryMachine >().pg;
+  pg->clear_reserved_num_bytes();
+  pg->state_clear(PG_STATE_BACKFILLING);
   utime_t dur = ceph_clock_now() - enter_time;
   pg->osd->recoverystate_perf->tinc(rs_repwaitbackfillreserved_latency, dur);
 }
@@ -7749,6 +7751,7 @@ PG::RecoveryState::RepWaitBackfillReserved::react(const RemoteBackfillReserved &
 {
   PG *pg = context< RecoveryMachine >().pg;
 
+  pg->state_set(PG_STATE_BACKFILLING);
   pg->osd->send_message_osd_cluster(
       pg->primary.osd,
       new MBackfillReserve(
@@ -7774,7 +7777,6 @@ PG::RecoveryState::RepWaitBackfillReserved::react(
   const RemoteReservationRejected &evt)
 {
   PG *pg = context< RecoveryMachine >().pg;
-  pg->clear_reserved_num_bytes();
   pg->osd->remote_reserver.cancel_reservation(pg->info.pgid);
   return transit<RepNotRecovering>();
 }
@@ -7784,7 +7786,6 @@ PG::RecoveryState::RepWaitBackfillReserved::react(
   const RemoteReservationCanceled &evt)
 {
   PG *pg = context< RecoveryMachine >().pg;
-  pg->clear_reserved_num_bytes();
   pg->osd->remote_reserver.cancel_reservation(pg->info.pgid);
   return transit<RepNotRecovering>();
 }
@@ -7793,7 +7794,6 @@ boost::statechart::result
 PG::RecoveryState::RepWaitBackfillReserved::react(const RecoveryDone&)
 {
   PG *pg = context< RecoveryMachine >().pg;
-  pg->clear_reserved_num_bytes();
   pg->osd->remote_reserver.cancel_reservation(pg->info.pgid);
   return transit<RepNotRecovering>();
 }

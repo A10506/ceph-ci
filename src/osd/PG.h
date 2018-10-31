@@ -2911,6 +2911,7 @@ protected:
   bool is_clean() const { return state_test(PG_STATE_CLEAN); }
   bool is_degraded() const { return state_test(PG_STATE_DEGRADED); }
   bool is_undersized() const { return state_test(PG_STATE_UNDERSIZED); }
+  bool is_backfilling() const { return state_test(PG_STATE_BACKFILLING); }
   bool is_scrubbing() const { return state_test(PG_STATE_SCRUBBING); }
   bool is_remapped() const { return state_test(PG_STATE_REMAPPED); }
   bool is_peered() const {

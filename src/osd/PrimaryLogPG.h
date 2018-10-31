@@ -448,6 +448,9 @@ public:
   bool pg_is_undersized() const override {
     return is_undersized();
   }
+  bool pg_is_backfilling() const override {
+    return is_backfilling();
+  }
   
   void update_peer_last_complete_ondisk(
     pg_shard_t fromosd,
