@@ -208,9 +208,11 @@ cdef extern from "rbd/librbd.h" nogil:
 
     ctypedef struct rbd_image_migration_status_t:
         int64_t source_pool_id
+        char *source_image_namespace
         char *source_image_name
         char *source_image_id
         int64_t dest_pool_id
+        char *dest_image_namespace
         char *dest_image_name
         char *dest_image_id
         rbd_image_migration_state_t state
