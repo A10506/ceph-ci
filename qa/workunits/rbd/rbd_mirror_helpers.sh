@@ -462,6 +462,8 @@ status()
     do
 	echo "${cluster} status"
 	ceph --cluster ${cluster} -s
+	ceph --cluster ${cluster} service dump
+	ceph --cluster ${cluster} service status
 	echo
 
 	for image_pool in ${POOL} ${PARENT_POOL}
