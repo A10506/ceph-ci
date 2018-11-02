@@ -5840,6 +5840,22 @@ bool OSDMonitor::preprocess_command(MonOpRequestRef op)
     rdata.append(ss.str());
     ss.str("");
     goto reply;
+  } else if (prefix == "osd pool application enable" ||
+             prefix == "osd pool application disable" ||
+             prefix == "osd pool application set" ||
+             prefix == "osd pool application rm") {
+    bool changed = false;
+    r = preprocess_command_pool_application(prefix, cmdmap, ss, &changed);
+    if (r != 0) {
+      // Error, reply.
+      goto reply;
+    } else if (changed) {
+      // Valid mutation, proceed to prepare phase
+      return false;
+    } else {
+      // Idempotent case, reply
+      goto reply;
+    }
   } else {
     // try prepare update
     return false;
@@ -7111,17 +7127,26 @@ int OSDMonitor::prepare_command_pool_set(const cmdmap_t& cmdmap,
     if (interr.length()) {
       ss << "error parsing integer value '" << val << "': " << interr;
       return -EINVAL;
+    } else if (n < 0) {
+      ss << "hit_set_period should be non-negative";
+      return -EINVAL;
     }
     p.hit_set_period = n;
   } else if (var == "hit_set_count") {
     if (interr.length()) {
       ss << "error parsing integer value '" << val << "': " << interr;
       return -EINVAL;
+    } else if (n < 0) {
+      ss << "hit_set_count should be non-negative";
+      return -EINVAL;
     }
     p.hit_set_count = n;
   } else if (var == "hit_set_fpp") {
     if (floaterr.length()) {
       ss << "error parsing floating point value '" << val << "': " << floaterr;
+      return -EINVAL;
+    } else if (f < 0 || f > 1.0) {
+      ss << "hit_set_fpp should be in the range 0..1";
       return -EINVAL;
     }
     if (p.hit_set_params.get_type() != HitSet::TYPE_BLOOM) {
@@ -7362,6 +7387,30 @@ int OSDMonitor::prepare_command_pool_application(const string &prefix,
                                                  const cmdmap_t& cmdmap,
                                                  stringstream& ss)
 {
+  return _command_pool_application(prefix, cmdmap, ss, nullptr, true);
+}
+
+int OSDMonitor::preprocess_command_pool_application(const string &prefix,
+                                                    const cmdmap_t& cmdmap,
+                                                    stringstream& ss,
+                                                    bool *modified)
+{
+  return _command_pool_application(prefix, cmdmap, ss, modified, false);
+}
+
+
+/**
+ * Common logic for preprocess and prepare phases of pool application
+ * tag commands.  In preprocess mode we're only detecting invalid
+ * commands, and determining whether it was a modification or a no-op.
+ * In prepare mode we're actually updating the pending state.
+ */
+int OSDMonitor::_command_pool_application(const string &prefix,
+                                          const cmdmap_t& cmdmap,
+                                          stringstream& ss,
+                                          bool *modified,
+                                          bool preparing)
+{
   string pool_name;
   cmd_getval(cct, cmdmap, "pool", pool_name);
   int64_t pool = osdmap.lookup_pg_pool_name(pool_name.c_str());
@@ -7371,8 +7420,10 @@ int OSDMonitor::prepare_command_pool_application(const string &prefix,
   }
 
   pg_pool_t p = *osdmap.get_pg_pool(pool);
-  if (pending_inc.new_pools.count(pool)) {
-    p = pending_inc.new_pools[pool];
+  if (preparing) {
+    if (pending_inc.new_pools.count(pool)) {
+      p = pending_inc.new_pools[pool];
+    }
   }
 
   string app;
@@ -7519,8 +7570,17 @@ int OSDMonitor::prepare_command_pool_application(const string &prefix,
     ceph_abort();
   }
 
-  p.last_change = pending_inc.epoch;
-  pending_inc.new_pools[pool] = p;
+  if (preparing) {
+    p.last_change = pending_inc.epoch;
+    pending_inc.new_pools[pool] = p;
+  }
+
+  // Because we fell through this far, we didn't hit no-op cases,
+  // so pool was definitely modified
+  if (modified != nullptr) {
+    *modified = true;
+  }
+
   return 0;
 }
 
@@ -8602,18 +8662,42 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
        goto reply;
      }
 
+     if (!osdmap.crush->class_exists(device_class)) {
+       err = 0;
+       goto reply;
+     }
+
      CrushWrapper newcrush;
      _get_pending_crush(newcrush);
      if (!newcrush.class_exists(device_class)) {
-       err = -ENOENT;
-       ss << "class '" << device_class << "' does not exist";
-       goto reply;
+       err = 0; // make command idempotent
+       goto wait;
      }
      int class_id = newcrush.get_class_id(device_class);
      stringstream ts;
      if (newcrush.class_is_in_use(class_id, &ts)) {
        err = -EBUSY;
        ss << "class '" << device_class << "' " << ts.str();
+       goto reply;
+     }
+
+     // check if class is used by any erasure-code-profiles
+     mempool::osdmap::map<string,map<string,string>> old_ec_profiles =
+       osdmap.get_erasure_code_profiles();
+     auto ec_profiles = pending_inc.get_erasure_code_profiles();
+     ec_profiles.merge(old_ec_profiles);
+     list<string> referenced_by;
+     for (auto &i: ec_profiles) {
+       for (auto &j: i.second) {
+         if ("crush-device-class" == j.first && device_class == j.second) {
+           referenced_by.push_back(i.first);
+         }
+       }
+     }
+     if (!referenced_by.empty()) {
+       err = -EBUSY;
+       ss << "class '" << device_class
+          << "' is still referenced by erasure-code-profile(s): " << referenced_by;
        goto reply;
      }
 
@@ -12116,15 +12200,13 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
              prefix == "osd pool application set" ||
              prefix == "osd pool application rm") {
     err = prepare_command_pool_application(prefix, cmdmap, ss);
-    if (err == -EAGAIN)
+    if (err == -EAGAIN) {
       goto wait;
-    if (err < 0)
+    } else if (err < 0) {
       goto reply;
-
-    getline(ss, rs);
-    wait_for_finished_proposal(
-      op, new Monitor::C_Command(mon, op, 0, rs, get_last_committed() + 1));
-    return true;
+    } else {
+      goto update;
+    }
   } else if (prefix == "osd force-create-pg") {
     pg_t pgid;
     string pgidstr;

@@ -2185,3 +2185,31 @@ off64_t FileJournal::get_journal_size_estimate()
   dout(20) << __func__ << " journal size=" << size << dendl;
   return size;
 }
+
+void FileJournal::get_devices(set<string> *ls)
+{
+  char dev_node[PATH_MAX];
+  BlkDev blkdev(fd);
+  if (int rc = blkdev.wholedisk(dev_node, PATH_MAX); rc) {
+    return rc;
+  }
+  ls->insert(dev_node);
+  if (strncmp(dev_node, "dm-", 3) == 0) {
+    get_dm_parents(dev_node, ls);
+  }
+}
+
+void FileJournal::collect_metadata(map<string,string> *pm)
+{
+  BlkDev blkdev(fd);
+  if (rc = blkdev.partition(partition_path, PATH_MAX); rc) {
+    (*pm)["backend_filestore_journal_partition_path"] = "unknown";
+  } else {
+    (*pm)["backend_filestore_journal_partition_path"] = string(partition_path);
+  }
+  if (rc = blkdev.wholedisk(dev_node, PATH_MAX); rc) {
+    (*pm)["backend_filestore_journal_dev_node"] = "unknown";
+  } else {
+    (*pm)["backend_filestore_journal_dev_node"] = string(dev_node);
+  }
+}

@@ -255,7 +255,7 @@ public:
 
   ObjectStore::CollectionHandle ch;
 
-  class RecoveryCtx;
+  struct RecoveryCtx;
 
   // -- methods --
   std::ostream& gen_prefix(std::ostream& out) const override;
@@ -1283,7 +1283,7 @@ protected:
   map<hobject_t, list<Context*>> callbacks_for_degraded_object;
 
   map<eversion_t,
-      list<pair<OpRequestRef, version_t> > > waiting_for_ondisk;
+      list<tuple<OpRequestRef, version_t, int> > > waiting_for_ondisk;
 
   void requeue_object_waiters(map<hobject_t, list<OpRequestRef>>& m);
   void requeue_op(OpRequestRef op);
@@ -2978,7 +2978,7 @@ protected:
     return e <= cur_epoch;
   }
   bool have_same_or_newer_map(epoch_t e) {
-    return e <= get_osdmap()->get_epoch();
+    return e <= get_osdmap_epoch();
   }
 
   bool op_has_sufficient_caps(OpRequestRef& op);

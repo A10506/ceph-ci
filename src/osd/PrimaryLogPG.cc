@@ -134,7 +134,7 @@ public:
 GenContext<ThreadPool::TPHandle&> *PrimaryLogPG::bless_gencontext(
   GenContext<ThreadPool::TPHandle&> *c) {
   return new BlessedGenContext<ThreadPool::TPHandle&>(
-    this, c, get_osdmap()->get_epoch());
+    this, c, get_osdmap_epoch());
 }
 
 template <typename T>
@@ -161,7 +161,7 @@ public:
 GenContext<ThreadPool::TPHandle&> *PrimaryLogPG::bless_unlocked_gencontext(
   GenContext<ThreadPool::TPHandle&> *c) {
   return new UnlockedBlessedGenContext<ThreadPool::TPHandle&>(
-    this, c, get_osdmap()->get_epoch());
+    this, c, get_osdmap_epoch());
 }
 
 class PrimaryLogPG::BlessedContext : public Context {
@@ -187,7 +187,7 @@ public:
 };
 
 Context *PrimaryLogPG::bless_context(Context *c) {
-  return new BlessedContext(this, c, get_osdmap()->get_epoch());
+  return new BlessedContext(this, c, get_osdmap_epoch());
 }
 
 class PrimaryLogPG::C_PG_ObjectContext : public Context {
@@ -2105,46 +2105,42 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
     return;
   }
 
-  // degraded object?
-  if (write_ordered && is_degraded_or_backfilling_object(head)) {
-    if (can_backoff && g_conf()->osd_backoff_on_degraded) {
-      add_backoff(session, head, head);
-      maybe_kick_recovery(head);
-    } else {
-      wait_for_degraded_object(head, op);
+  if (write_ordered) {
+    // degraded object?
+    if (is_degraded_or_backfilling_object(head)) {
+      if (can_backoff && g_conf()->osd_backoff_on_degraded) {
+        add_backoff(session, head, head);
+        maybe_kick_recovery(head);
+      } else {
+        wait_for_degraded_object(head, op);
+      }
+      return;
     }
-    return;
-  }
 
-  if (write_ordered && scrubber.is_chunky_scrub_active() &&
-      write_blocked_by_scrub(head)) {
-    dout(20) << __func__ << ": waiting for scrub" << dendl;
-    waiting_for_scrub.push_back(op);
-    op->mark_delayed("waiting for scrub");
-    return;
-  }
+    if (scrubber.is_chunky_scrub_active() && write_blocked_by_scrub(head)) {
+      dout(20) << __func__ << ": waiting for scrub" << dendl;
+      waiting_for_scrub.push_back(op);
+      op->mark_delayed("waiting for scrub");
+      return;
+    }
 
-  // blocked on snap?
-  map<hobject_t, snapid_t>::iterator blocked_iter =
-    objects_blocked_on_degraded_snap.find(head);
-  if (write_ordered && blocked_iter != objects_blocked_on_degraded_snap.end()) {
-    hobject_t to_wait_on(head);
-    to_wait_on.snap = blocked_iter->second;
-    wait_for_degraded_object(to_wait_on, op);
-    return;
-  }
-  map<hobject_t, ObjectContextRef>::iterator blocked_snap_promote_iter =
-    objects_blocked_on_snap_promotion.find(head);
-  if (write_ordered && 
-      blocked_snap_promote_iter != objects_blocked_on_snap_promotion.end()) {
-    wait_for_blocked_object(
-      blocked_snap_promote_iter->second->obs.oi.soid,
-      op);
-    return;
-  }
-  if (write_ordered && objects_blocked_on_cache_full.count(head)) {
-    block_write_on_full_cache(head, op);
-    return;
+    // blocked on snap?
+    if (auto blocked_iter = objects_blocked_on_degraded_snap.find(head);
+	blocked_iter != std::end(objects_blocked_on_degraded_snap)) {
+      hobject_t to_wait_on(head);
+      to_wait_on.snap = blocked_iter->second;
+      wait_for_degraded_object(to_wait_on, op);
+      return;
+    }
+    if (auto blocked_snap_promote_iter = objects_blocked_on_snap_promotion.find(head);
+	blocked_snap_promote_iter != std::end(objects_blocked_on_snap_promotion)) {
+      wait_for_blocked_object(blocked_snap_promote_iter->second->obs.oi.soid, op);
+      return;
+    }
+    if (objects_blocked_on_cache_full.count(head)) {
+      block_write_on_full_cache(head, op);
+      return;
+    }
   }
 
   // dup/resent?
@@ -2167,7 +2163,7 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
       } else {
 	dout(10) << " waiting for " << version << " to commit" << dendl;
         // always queue ondisk waiters, so that we can requeue if needed
-	waiting_for_ondisk[version].push_back(make_pair(op, user_version));
+	waiting_for_ondisk[version].emplace_back(op, user_version, return_code);
 	op->mark_delayed("waiting for ondisk");
       }
       return;
@@ -3951,7 +3947,7 @@ void PrimaryLogPG::execute_ctx(OpContext *ctx)
 
   bool successful_write = !ctx->op_t->empty() && op->may_write() && result >= 0;
   // prepare the reply
-  ctx->reply = new MOSDOpReply(m, 0, get_osdmap()->get_epoch(), 0,
+  ctx->reply = new MOSDOpReply(m, 0, get_osdmap_epoch(), 0,
 			       successful_write);
 
   // Write operations aren't allowed to return a data payload because
@@ -4039,7 +4035,7 @@ void PrimaryLogPG::execute_ctx(OpContext *ctx)
 	if (reply)
 	  ctx->reply = nullptr;
 	else {
-	  reply = new MOSDOpReply(m, 0, get_osdmap()->get_epoch(), 0, true);
+	  reply = new MOSDOpReply(m, 0, get_osdmap_epoch(), 0, true);
 	  reply->set_reply_versions(ctx->at_version,
 				    ctx->user_at_version);
 	}
@@ -4213,6 +4209,7 @@ void PrimaryLogPG::do_scan(
       } else {
 	// we canceled backfill for a while due to a too full, and this
 	// is an extra response from a non-too-full peer
+	dout(20) << __func__ << " canceled backfill (too full?)" << dendl;
       }
     }
     break;
@@ -8485,8 +8482,10 @@ void PrimaryLogPG::finish_ctx(OpContext *ctx, int log_op_type)
   }
 
   if (!ctx->extra_reqids.empty()) {
-    dout(20) << __func__ << "  extra_reqids " << ctx->extra_reqids << dendl;
+    dout(20) << __func__ << "  extra_reqids " << ctx->extra_reqids << " "
+             << ctx->extra_reqid_return_codes << dendl;
     ctx->log.back().extra_reqids.swap(ctx->extra_reqids);
+    ctx->log.back().extra_reqid_return_codes.swap(ctx->extra_reqid_return_codes);
   }
 
   // apply new object state.
@@ -8784,7 +8783,9 @@ int PrimaryLogPG::do_copy_get(OpContext *ctx, bufferlist::const_iterator& bp,
   if (cursor.is_complete()) {
     // include reqids only in the final step.  this is a bit fragile
     // but it works...
-    pg_log.get_log().get_object_reqids(ctx->obc->obs.oi.soid, 10, &reply_obj.reqids);
+    pg_log.get_log().get_object_reqids(ctx->obc->obs.oi.soid, 10,
+                                       &reply_obj.reqids,
+                                       &reply_obj.reqid_return_codes);
     dout(20) << " got reqids" << dendl;
   }
 
@@ -8820,7 +8821,8 @@ void PrimaryLogPG::fill_in_copy_get_noent(OpRequestRef& op, hobject_t oid,
   uint64_t features = m->get_features();
   object_copy_data_t reply_obj;
 
-  pg_log.get_log().get_object_reqids(oid, 10, &reply_obj.reqids);
+  pg_log.get_log().get_object_reqids(oid, 10, &reply_obj.reqids,
+                                     &reply_obj.reqid_return_codes);
   dout(20) << __func__ << " got reqids " << reply_obj.reqids << dendl;
   encode(reply_obj, osd_op.outdata, features);
   osd_op.rval = -ENOENT;
@@ -8922,6 +8924,7 @@ void PrimaryLogPG::_copy_some(ObjectContextRef obc, CopyOpRef cop)
 	      &cop->results.source_data_digest,
 	      &cop->results.source_omap_digest,
 	      &cop->results.reqids,
+	      &cop->results.reqid_return_codes,
 	      &cop->results.truncate_seq,
 	      &cop->results.truncate_size,
 	      &cop->rval);
@@ -9464,6 +9467,7 @@ void PrimaryLogPG::finish_copyfrom(CopyFromCallback *cb)
   obs.oi.truncate_size = cb->results->truncate_size;
 
   ctx->extra_reqids = cb->results->reqids;
+  ctx->extra_reqid_return_codes = cb->results->reqid_return_codes;
 
   // cache: clear whiteout?
   if (obs.oi.is_whiteout()) {
@@ -9627,6 +9631,7 @@ void PrimaryLogPG::finish_promote(int r, CopyResults *results,
   tctx->new_obs.exists = true;
 
   tctx->extra_reqids = results->reqids;
+  tctx->extra_reqid_return_codes = results->reqid_return_codes;
 
   if (whiteout) {
     // create a whiteout
@@ -10363,12 +10368,13 @@ void PrimaryLogPG::eval_repop(RepGather *repop)
     auto it = waiting_for_ondisk.find(repop->v);
     if (it != waiting_for_ondisk.end()) {
       ceph_assert(waiting_for_ondisk.begin()->first == repop->v);
-      for (list<pair<OpRequestRef, version_t> >::iterator i =
-	     it->second.begin();
-	   i != it->second.end();
-	   ++i) {
-	osd->reply_op_error(i->first, repop->r, repop->v,
-			    i->second);
+      for (auto& i : it->second) {
+        int return_code = repop->r;
+        if (return_code >= 0) {
+          return_code = std::get<2>(i);
+        }
+        osd->reply_op_error(std::get<0>(i), return_code, repop->v,
+                            std::get<1>(i));
       }
       waiting_for_ondisk.erase(it);
     }
@@ -11877,15 +11883,11 @@ void PrimaryLogPG::apply_and_flush_repops(bool requeue)
       }
 
       // also requeue any dups, interleaved into position
-      map<eversion_t, list<pair<OpRequestRef, version_t> > >::iterator p =
-	waiting_for_ondisk.find(repop->v);
+      auto p = waiting_for_ondisk.find(repop->v);
       if (p != waiting_for_ondisk.end()) {
 	dout(10) << " also requeuing ondisk waiters " << p->second << dendl;
-	for (list<pair<OpRequestRef, version_t> >::iterator i =
-	       p->second.begin();
-	     i != p->second.end();
-	     ++i) {
-	  rq.push_back(i->first);
+	for (auto& i : p->second) {
+	  rq.push_back(std::get<0>(i));
 	}
 	waiting_for_ondisk.erase(p);
       }
@@ -11899,17 +11901,11 @@ void PrimaryLogPG::apply_and_flush_repops(bool requeue)
   if (requeue) {
     requeue_ops(rq);
     if (!waiting_for_ondisk.empty()) {
-      for (map<eversion_t, list<pair<OpRequestRef, version_t> > >::iterator i =
-	     waiting_for_ondisk.begin();
-	   i != waiting_for_ondisk.end();
-	   ++i) {
-	for (list<pair<OpRequestRef, version_t> >::iterator j =
-	       i->second.begin();
-	     j != i->second.end();
-	     ++j) {
-	  derr << __func__ << ": op " << *(j->first->get_req()) << " waiting on "
-	       << i->first << dendl;
-	}
+      for (auto& i : waiting_for_ondisk) {
+        for (auto& j : i.second) {
+          derr << __func__ << ": op " << *(std::get<0>(j)->get_req())
+               << " waiting on " << i.first << dendl;
+        }
       }
       ceph_assert(waiting_for_ondisk.empty());
     }

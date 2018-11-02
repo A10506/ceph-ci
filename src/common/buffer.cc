@@ -849,42 +849,30 @@ using namespace ceph;
     : iterator_impl<is_const>(i.bl, i.off, i.p, i.p_off) {}
 
   template<bool is_const>
-  void buffer::list::iterator_impl<is_const>::advance(int o)
+  void buffer::list::iterator_impl<is_const>::advance(unsigned o)
   {
-    //cout << this << " advance " << o << " from " << off << " (p_off " << p_off << " in " << p->length() << ")" << std::endl;
-    if (o > 0) {
-      p_off += o;
-      while (p_off > 0) {
-	if (p == ls->end())
-	  throw end_of_buffer();
-	if (p_off >= p->length()) {
-	  // skip this buffer
-	  p_off -= p->length();
-	  p++;
-	} else {
-	  // somewhere in this buffer!
-	  break;
-	}
-      }
-      off += o;
+    //cout << this << " advance " << o << " from " << off
+    //     << " (p_off " << p_off << " in " << p->length() << ")"
+    //     << std::endl;
+
+    p_off += o;
+
+    if (!o) {
       return;
     }
-    while (o < 0) {
-      if (p_off) {
-	unsigned d = -o;
-	if (d > p_off)
-	  d = p_off;
-	p_off -= d;
-	off -= d;
-	o += d;
-      } else if (off > 0) {
-	ceph_assert(p != ls->begin());
-	p--;
-	p_off = p->length();
+    while (p_off > 0) {
+      if (p == ls->end())
+        throw end_of_buffer();
+      if (p_off >= p->length()) {
+        // skip this buffer
+        p_off -= p->length();
+        p++;
       } else {
-	throw end_of_buffer();
+        // somewhere in this buffer!
+        break;
       }
     }
+    off += o;
   }
 
   template<bool is_const>
@@ -909,7 +897,7 @@ using namespace ceph;
   {
     if (p == ls->end())
       throw end_of_buffer();
-    advance(1);
+    advance(1u);
     return *this;
   }
 
@@ -1086,7 +1074,7 @@ using namespace ceph;
     : iterator_impl(l, o, ip, po)
   {}
 
-  void buffer::list::iterator::advance(int o)
+  void buffer::list::iterator::advance(unsigned o)
   {
     buffer::list::iterator_impl<false>::advance(o);
   }
@@ -1402,6 +1390,32 @@ using namespace ceph;
     }
   }
 
+  uint64_t buffer::list::get_wasted_space() const
+  {
+    if (_buffers.size() == 1)
+      return _buffers.back().wasted();
+
+    std::vector<const raw*> raw_vec;
+    raw_vec.reserve(_buffers.size());
+    for (const auto& p : _buffers)
+      raw_vec.push_back(p.get_raw());
+    std::sort(raw_vec.begin(), raw_vec.end());
+
+    uint64_t total = 0;
+    const raw *last = nullptr;
+    for (const auto r : raw_vec) {
+      if (r == last)
+	continue;
+      last = r;
+      total += r->len;
+    }
+    // If multiple buffers are sharing the same raw buffer and they overlap
+    // with each other, the wasted space will be underestimated.
+    if (total <= length())
+      return 0;
+    return total - length();
+  }
+
   void buffer::list::rebuild()
   {
     if (_len == 0) {
@@ -1665,6 +1679,25 @@ using namespace ceph;
       if (s.length())
 	append("\n", 1);
     }
+  }
+
+  buffer::list::contiguous_filler buffer::list::append_hole(const unsigned len)
+  {
+    if (unlikely(append_buffer.unused_tail_length() < len)) {
+      // make a new append_buffer.  fill out a complete page, factoring in
+      // the raw_combined overhead.
+      const size_t need = \
+	round_up_to(len, sizeof(size_t)) + sizeof(raw_combined);
+      const size_t alen = \
+	round_up_to(need, CEPH_BUFFER_ALLOC_UNIT) - sizeof(raw_combined);
+      append_buffer = raw_combined::create(alen, 0, get_mempool());
+      append_buffer.set_length(0);
+    }
+
+    append_buffer.set_length(append_buffer.length() + len);
+    append(append_buffer, append_buffer.length() - len, len);
+
+    return { std::prev(std::end(_buffers))->end_c_str() - len };
   }
 
   void buffer::list::prepend_zero(unsigned len)

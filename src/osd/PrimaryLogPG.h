@@ -95,6 +95,7 @@ public:
     uint32_t source_data_digest, source_omap_digest;
     uint32_t data_digest, omap_digest;
     mempool::osd_pglog::vector<pair<osd_reqid_t, version_t> > reqids; // [(reqid, user_version)]
+    mempool::osd_pglog::map<uint32_t, int> reqid_return_codes; // map reqids by index to error code
     map<string, bufferlist> attrs; // xattrs
     uint64_t truncate_seq;
     uint64_t truncate_size;
@@ -369,8 +370,11 @@ public:
   bool pgb_is_primary() const override {
     return is_primary();
   }
-  OSDMapRef pgb_get_osdmap() const override {
+  OSDMapRef pgb_get_osdmap() const override final {
     return get_osdmap();
+  }
+  epoch_t pgb_get_osdmap_epoch() const override final {
+    return get_osdmap_epoch();
   }
   const pg_info_t &get_info() const override {
     return info;
@@ -576,6 +580,7 @@ public:
     int num_write;   ///< count update ops
 
     mempool::osd_pglog::vector<pair<osd_reqid_t, version_t> > extra_reqids;
+    mempool::osd_pglog::map<uint32_t, int> extra_reqid_return_codes;
 
     hobject_t new_temp_oid, discard_temp_oid;  ///< temp objects we should start/stop tracking
 

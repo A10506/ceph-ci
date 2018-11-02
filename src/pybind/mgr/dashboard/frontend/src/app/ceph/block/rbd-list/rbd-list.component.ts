@@ -5,7 +5,7 @@ import { BsModalRef, BsModalService } from 'ngx-bootstrap/modal';
 
 import { RbdService } from '../../../shared/api/rbd.service';
 import { ConfirmationModalComponent } from '../../../shared/components/confirmation-modal/confirmation-modal.component';
-import { DeletionModalComponent } from '../../../shared/components/deletion-modal/deletion-modal.component';
+import { CriticalConfirmationModalComponent } from '../../../shared/components/critical-confirmation-modal/critical-confirmation-modal.component';
 import { TableComponent } from '../../../shared/datatable/table/table.component';
 import { CellTemplate } from '../../../shared/enum/cell-template.enum';
 import { ViewCacheStatus } from '../../../shared/enum/view-cache-status.enum';
@@ -85,7 +85,7 @@ export class RbdListComponent implements OnInit {
       permission: 'create',
       icon: 'fa-plus',
       routerLink: () => '/block/rbd/add',
-      buttonCondition: (selection: CdTableSelection) => !selection.hasSingleSelection,
+      canBePrimary: (selection: CdTableSelection) => !selection.hasSingleSelection,
       name: 'Add'
     };
     const editAction: CdTableAction = {
@@ -102,7 +102,7 @@ export class RbdListComponent implements OnInit {
     };
     const copyAction: CdTableAction = {
       permission: 'create',
-      buttonCondition: (selection: CdTableSelection) => selection.hasSingleSelection,
+      canBePrimary: (selection: CdTableSelection) => selection.hasSingleSelection,
       disable: (selection: CdTableSelection) =>
         !selection.hasSingleSelection || selection.first().cdExecuting,
       icon: 'fa-copy',
@@ -231,8 +231,24 @@ export class RbdListComponent implements OnInit {
   }
 
   itemFilter(entry, task) {
+    let pool_name_k: string;
+    let image_name_k: string;
+    switch (task.name) {
+      case 'rbd/copy':
+        pool_name_k = 'dest_pool_name';
+        image_name_k = 'dest_image_name';
+        break;
+      case 'rbd/clone':
+        pool_name_k = 'child_pool_name';
+        image_name_k = 'child_image_name';
+        break;
+      default:
+        pool_name_k = 'pool_name';
+        image_name_k = 'image_name';
+        break;
+    }
     return (
-      entry.pool_name === task.metadata['pool_name'] && entry.name === task.metadata['image_name']
+      entry.pool_name === task.metadata[pool_name_k] && entry.name === task.metadata[image_name_k]
     );
   }
 
@@ -256,7 +272,7 @@ export class RbdListComponent implements OnInit {
     const poolName = this.selection.first().pool_name;
     const imageName = this.selection.first().name;
 
-    this.modalRef = this.modalService.show(DeletionModalComponent, {
+    this.modalRef = this.modalService.show(CriticalConfirmationModalComponent, {
       initialState: {
         itemDescription: 'RBD',
         submitActionObservable: () =>

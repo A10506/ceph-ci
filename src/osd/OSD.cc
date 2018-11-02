@@ -18,6 +18,7 @@
 #include <cctype>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 
 #include <unistd.h>
 #include <sys/stat.h>
@@ -4956,11 +4957,10 @@ void OSD::heartbeat()
 
 bool OSD::heartbeat_reset(Connection *con)
 {
+  std::lock_guard l(heartbeat_lock);
   auto s = con->get_priv();
   if (s) {
-    heartbeat_lock.Lock();
     if (is_stopping()) {
-      heartbeat_lock.Unlock();
       return true;
     }
     auto heartbeat_session = static_cast<HeartbeatSession*>(s.get());
@@ -4995,7 +4995,6 @@ bool OSD::heartbeat_reset(Connection *con)
     } else {
       dout(10) << "heartbeat_reset closing (old) failed hb con " << con << dendl;
     }
-    heartbeat_lock.Unlock();
   }
   return true;
 }
@@ -6090,7 +6089,7 @@ int OSD::_do_command(
     JSONFormatter *f = new JSONFormatter();
     f->open_object_section("command_descriptions");
     for (OSDCommand *cp = osd_commands;
-	 cp < &osd_commands[ARRAY_SIZE(osd_commands)]; cp++) {
+	 cp < &osd_commands[std::size(osd_commands)]; cp++) {
 
       ostringstream secname;
       secname << "cmd" << setfill('0') << std::setw(3) << cmdnum;
@@ -10195,17 +10194,21 @@ void OSD::ShardedOpWQ::_process(uint32_t thread_index, heartbeat_handle_d *hb)
   auto& sdata = osd->shards[shard_index];
   ceph_assert(sdata);
 
-  // If all threads of shards do oncommits, there is a out-of-order problem.
-  // So we choose the thread which has the smallest thread_index(thread_index < num_shards) of shard
-  // to do oncommit callback.
+  // If all threads of shards do oncommits, there is a out-of-order
+  // problem.  So we choose the thread which has the smallest
+  // thread_index(thread_index < num_shards) of shard to do oncommit
+  // callback.
   bool is_smallest_thread_index = thread_index < osd->num_shards;
 
   // peek at spg_t
   sdata->shard_lock.Lock();
   if (sdata->pqueue->empty() &&
-     !(is_smallest_thread_index && !sdata->context_queue.empty())) {
+      (!is_smallest_thread_index || sdata->context_queue.empty())) {
     sdata->sdata_wait_lock.Lock();
-    if (!sdata->stop_waiting) {
+    if (is_smallest_thread_index && !sdata->context_queue.empty()) {
+      // we raced with a context_queue addition, don't wait
+      sdata->sdata_wait_lock.Unlock();
+    } else if (!sdata->stop_waiting) {
       dout(20) << __func__ << " empty q, waiting" << dendl;
       osd->cct->get_heartbeat_map()->clear_timeout(hb);
       sdata->shard_lock.Unlock();

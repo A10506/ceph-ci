@@ -4988,6 +4988,14 @@ std::vector<Option> get_global_options() {
     Option("target_max_misplaced_ratio", Option::TYPE_FLOAT, Option::LEVEL_BASIC)
     .set_default(.05)
     .set_description("Max ratio of misplaced objects to target when throttling data rebalancing activity"),
+
+    Option("device_failure_prediction_mode", Option::TYPE_STR, Option::LEVEL_BASIC)
+    .set_default("none")
+    .set_enum_allowed({"none", "local", "cloud"})
+    .set_description("Method used to predict device failures")
+    .set_long_description("To disable prediction, use 'none',  'local' uses a prediction model that runs inside the mgr daemon.  'cloud' will share metrics with a cloud service and query the service for devicelife expectancy."),
+
+
   });
 }
 
@@ -6236,6 +6244,17 @@ std::vector<Option> get_rgw_options() {
     Option("rgw_reshard_bucket_lock_duration", Option::TYPE_INT, Option::LEVEL_DEV)
     .set_default(120)
     .set_description(""),
+
+    Option("rgw_trust_forwarded_https", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(false)
+    .set_description("Trust Forwarded and X-Forwarded-Proto headers")
+    .set_long_description(
+        "When a proxy in front of radosgw is used for ssl termination, radosgw "
+        "does not know whether incoming http connections are secure. Enable "
+        "this option to trust the Forwarded and X-Forwarded-Proto headers sent "
+        "by the proxy when determining whether the connection is secure. This "
+        "is required for some features, such as server side encryption.")
+    .add_see_also("rgw_crypt_require_ssl"),
 
     Option("rgw_crypt_require_ssl", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
